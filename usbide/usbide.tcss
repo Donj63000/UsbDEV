@@ -1,0 +1,27 @@
+#main {
+  height: 1fr;
+}
+
+#tree {
+  width: 34;
+  border: solid;
+}
+
+#right {
+  width: 1fr;
+}
+
+#editor {
+  height: 1fr;
+  border: solid;
+}
+
+#cmd {
+  height: 3;
+  border: solid;
+}
+
+#log {
+  height: 12;
+  border: solid;
+}
