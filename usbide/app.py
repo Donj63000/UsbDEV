@@ -19,11 +19,14 @@ from usbide.runner import (
     codex_install_prefix,
     codex_login_argv,
     codex_status_argv,
+    parse_tool_list,
     pyinstaller_available,
     pyinstaller_build_argv,
     pyinstaller_install_argv,
+    pip_install_argv,
     python_run_argv,
     stream_subprocess,
+    tool_available,
     tools_env,
     tools_install_prefix,
     windows_cmd_argv,
@@ -53,6 +56,7 @@ class USBIDEApp(App):
         ("ctrl+t", "codex_check", "Codex check"),
         ("ctrl+i", "codex_install", "Codex install"),
         ("ctrl+e", "build_exe", "Build EXE"),
+        ("ctrl+d", "dev_tools", "Dev tools"),
         ("ctrl+q", "quit", "Quit"),
     ]
 
@@ -100,7 +104,7 @@ class USBIDEApp(App):
         self._log_ui(
             f"[b]USBIDE[/b]\nRoot: {self.root_dir}\n"
             "Ctrl+S save • F5 run • Ctrl+R reload tree • Ctrl+L clear log • "
-            "Ctrl+I install Codex • Ctrl+E build EXE • Ctrl+Q quit\n"
+            "Ctrl+I install Codex • Ctrl+D dev tools • Ctrl+E build EXE • Ctrl+Q quit\n"
             "Astuce: utilise le champ `>` pour lancer des commandes shell (dir, git, etc.)."
         )
         self._refresh_title()
@@ -142,6 +146,69 @@ class USBIDEApp(App):
         """Indique si l'installation automatique de Codex est autorisée."""
         value = os.environ.get("USBIDE_CODEX_AUTO_INSTALL", "1").strip().lower()
         return value not in {"0", "false", "no", "off"}
+
+    def _dev_tools_list(self) -> list[str]:
+        """Retourne la liste des outils dev à embarquer localement."""
+        raw = os.environ.get("USBIDE_DEV_TOOLS", "ruff black mypy pytest")
+        tools = parse_tool_list(raw)
+        if not tools:
+            # On avertit si la liste est vide pour éviter une installation silencieuse.
+            self._log_ui(
+                "[yellow]Liste d'outils dev vide.[/yellow] "
+                "Définissez USBIDE_DEV_TOOLS pour configurer les outils."
+            )
+        return tools
+
+    async def _install_dev_tools(self, *, force: bool = False) -> bool:
+        """Installe les outils dev dans le préfixe portable si besoin."""
+        tools = self._dev_tools_list()
+        if not tools:
+            return False
+
+        env = self._tools_env()
+        missing = [tool for tool in tools if not tool_available(tool, self.root_dir, env)]
+        if not missing and not force:
+            self._log_ui("[green]Outils dev déjà disponibles.[/green]")
+            return True
+
+        prefix = tools_install_prefix(self.root_dir)
+        prefix.mkdir(parents=True, exist_ok=True)
+        packages = tools if force else missing
+
+        self._log_ui(
+            "[b]Installation outils dev[/b] : "
+            f"packages={rich_escape(' '.join(packages))} • "
+            f"prefix={rich_escape(str(prefix))}"
+        )
+
+        try:
+            argv = pip_install_argv(prefix, packages)
+        except ValueError as e:
+            self._log_ui(f"[red]Liste d'outils invalide:[/red] {e}")
+            return False
+
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+
+        try:
+            async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+                if ev["kind"] == "line":
+                    self._log_output(ev["text"])
+                else:
+                    self._log_ui(f"[dim]{ev['text']}[/dim]")
+        except Exception as e:
+            self._log_ui(f"[red]Erreur installation outils dev:[/red] {e}")
+            return False
+
+        still_missing = [tool for tool in tools if not tool_available(tool, self.root_dir, env)]
+        if still_missing:
+            self._log_ui(
+                "[yellow]Outils manquants après installation:[/yellow] "
+                f"{rich_escape(' '.join(still_missing))}"
+            )
+            return False
+
+        self._log_ui("[green]Outils dev installés.[/green]")
+        return True
 
     async def _install_codex(self, *, force: bool = False) -> bool:
         """Installe Codex dans le préfixe portable si nécessaire."""
@@ -458,6 +525,10 @@ class USBIDEApp(App):
     async def action_codex_install(self) -> None:
         """Installe ou met à jour Codex dans l'environnement portable."""
         await self._install_codex(force=True)
+
+    async def action_dev_tools(self) -> None:
+        """Installe les outils de dev localement si besoin."""
+        await self._install_dev_tools(force=False)
 
     async def action_build_exe(self) -> None:
         """Construit un exécutable via PyInstaller pour le script courant."""
