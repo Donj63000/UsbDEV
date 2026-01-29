@@ -17,3 +17,13 @@
 ## Contexte produit
 - Nous développons un logiciel pour transporter Codex dans un terminal sur clé USB,
   afin de l'utiliser sur n'importe quel PC **sans installation** sur la machine hôte.
+
+## Technologies et composants clés du projet
+- **Python 3.10+** comme langage principal (voir `pyproject.toml`).  
+- **Textual** (`textual[syntax]`) pour l'interface TUI, avec styles **`.tcss`** pour le rendu.  
+- **Packaging** via `setuptools` et point d'entrée CLI `usbide` (script console).  
+- Organisation du code dans le paquet `usbide/` avec modules applicatifs dédiés.  
+
+## Exigences de performance cognitive
+- Toujours **analyser le contexte** et **proposer un plan multi‑étapes** avant d'agir.  
+- Vérifier les hypothèses, couvrir les cas limites et expliciter les choix techniques.  
