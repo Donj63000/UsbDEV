@@ -1,27 +1,56 @@
+/* Styles UI principaux pour une interface plus agréable et lisible. */
+/* Remarque : commentaires en français conformément aux consignes. */
 #main {
   height: 1fr;
+  background: $surface;
+  color: $text;
 }
 
 #tree {
   width: 34;
-  border: solid;
+  border: heavy $primary;
+  border-title: "Fichiers";
+  background: $panel;
+  color: $text;
 }
 
 #right {
   width: 1fr;
+  background: $surface;
 }
 
 #editor {
   height: 1fr;
-  border: solid;
+  border: heavy $secondary;
+  border-title: "Éditeur";
+  background: $surface;
+  color: $text;
 }
 
 #cmd {
   height: 3;
-  border: solid;
+  border: heavy $accent;
+  border-title: "Commande";
+  background: $panel;
+  color: $text;
 }
 
 #log {
   height: 12;
-  border: solid;
+  border: heavy $success;
+  border-title: "Journal";
+  background: $panel;
+  color: $text;
+}
+
+Header {
+  background: $primary;
+  color: $text;
+  dock: top;
+}
+
+Footer {
+  background: $primary-darken-2;
+  color: $text;
+  dock: bottom;
 }
