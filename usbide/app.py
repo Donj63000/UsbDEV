@@ -11,7 +11,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import DirectoryTree, Footer, Header, Input, RichLog, TextArea
 
 from usbide.encoding import detect_text_encoding, is_probably_binary
-from usbide.runner import python_run_argv, stream_subprocess, windows_cmd_argv
+from usbide.runner import codex_cli_available, codex_login_argv, python_run_argv, stream_subprocess, windows_cmd_argv
 
 
 @dataclass
@@ -33,6 +33,7 @@ class USBIDEApp(App):
         ("f5", "run", "Run"),
         ("ctrl+l", "clear_log", "Clear log"),
         ("ctrl+r", "reload_tree", "Reload tree"),
+        ("ctrl+k", "codex_login", "Codex login"),
         ("ctrl+q", "quit", "Quit"),
     ]
 
@@ -243,3 +244,35 @@ class USBIDEApp(App):
                     self._log_ui(f"[dim]{ev['text']}[/dim]")
         except Exception as e:
             self._log_ui(f"[red]Erreur exécution:[/red] {e}")
+
+    async def action_codex_login(self) -> None:
+        """Lance l'authentification Codex via le CLI."""
+        if not codex_cli_available():
+            self._log_ui(
+                "[red]CLI Codex introuvable.[/red] Installez-le puis relancez la commande."
+            )
+            return
+
+        # Message utilisateur pour préciser le flux d'authentification.
+        self._log_ui(
+            "[b]Authentification Codex[/b] : une page ChatGPT peut s'ouvrir "
+            "dans votre navigateur. Suivez les instructions affichées."
+        )
+
+        argv = codex_login_argv()
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+
+        env = os.environ.copy()
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+
+        try:
+            async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+                if ev["kind"] == "line":
+                    self._log_output(ev["text"])
+                else:
+                    self._log_ui(f"[dim]{ev['text']}[/dim]")
+        except FileNotFoundError as e:
+            self._log_ui(f"[red]CLI Codex introuvable:[/red] {e}")
+        except Exception as e:
+            self._log_ui(f"[red]Erreur exécution Codex:[/red] {e}")
