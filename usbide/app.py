@@ -47,17 +47,18 @@ class USBIDEApp(App):
     """
 
     CSS_PATH = "usbide.tcss"
+    # Libellés en français pour une interface 100 % francophone.
     BINDINGS = [
-        ("ctrl+s", "save", "Save"),
-        ("f5", "run", "Run"),
-        ("ctrl+l", "clear_log", "Clear log"),
-        ("ctrl+r", "reload_tree", "Reload tree"),
-        ("ctrl+k", "codex_login", "Codex login"),
-        ("ctrl+t", "codex_check", "Codex check"),
-        ("ctrl+i", "codex_install", "Codex install"),
-        ("ctrl+e", "build_exe", "Build EXE"),
-        ("ctrl+d", "dev_tools", "Dev tools"),
-        ("ctrl+q", "quit", "Quit"),
+        ("ctrl+s", "save", "Sauvegarder"),
+        ("f5", "run", "Exécuter"),
+        ("ctrl+l", "clear_log", "Effacer le journal"),
+        ("ctrl+r", "reload_tree", "Recharger l'arborescence"),
+        ("ctrl+k", "codex_login", "Connexion Codex"),
+        ("ctrl+t", "codex_check", "Vérifier Codex"),
+        ("ctrl+i", "codex_install", "Installer Codex"),
+        ("ctrl+e", "build_exe", "Construire l'EXE"),
+        ("ctrl+d", "dev_tools", "Outils de dev"),
+        ("ctrl+q", "quit", "Quitter"),
     ]
 
     def __init__(self, root_dir: Path) -> None:
@@ -104,8 +105,9 @@ class USBIDEApp(App):
         self._log_ui(
             # Affichage de bienvenue aligné sur le nom produit.
             f"[b]ValDev Pro v1[/b]\nRoot: {self.root_dir}\n"
-            "Ctrl+S save • F5 run • Ctrl+R reload tree • Ctrl+L clear log • "
-            "Ctrl+I install Codex • Ctrl+D dev tools • Ctrl+E build EXE • Ctrl+Q quit\n"
+            "Ctrl+S sauvegarder • F5 exécuter • Ctrl+R recharger l'arborescence • "
+            "Ctrl+L effacer le journal • Ctrl+I installer Codex • Ctrl+D outils de dev • "
+            "Ctrl+E construire l'EXE • Ctrl+Q quitter\n"
             "Astuce: utilise le champ `>` pour lancer des commandes shell (dir, git, etc.)."
         )
         self._refresh_title()
@@ -393,11 +395,13 @@ class USBIDEApp(App):
     # -------- Actions --------
     def action_clear_log(self) -> None:
         self.query_one(RichLog).clear()
-        self._log_ui("[dim]log cleared[/dim]")
+        # Message explicite en français pour l'utilisateur.
+        self._log_ui("[dim]journal effacé[/dim]")
 
     def action_reload_tree(self) -> None:
         self.query_one(DirectoryTree).reload()
-        self._log_ui("[dim]tree reloaded[/dim]")
+        # Message explicite en français pour l'utilisateur.
+        self._log_ui("[dim]arborescence rechargée[/dim]")
 
     def action_save(self) -> None:
         if not self.current:
