@@ -33,8 +33,14 @@ def is_probably_binary(path: Path, sniff_bytes: int = 2048) -> bool:
     - présence d'un NUL dans les premiers bytes
     - trop de caractères de contrôle non-textuels
     """
+    # Protection: une taille invalide ne permet pas d'échantillonnage fiable.
+    if sniff_bytes <= 0:
+        return False
+
     try:
-        data = path.read_bytes()[:sniff_bytes]
+        # Lecture limitée pour éviter de charger de gros fichiers en mémoire.
+        with path.open("rb") as fh:
+            data = fh.read(sniff_bytes)
     except OSError:
         return True
 
