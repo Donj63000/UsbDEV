@@ -87,6 +87,62 @@ def codex_env(root_dir: Path, base_env: Optional[Dict[str, str]] = None) -> Dict
     return env
 
 
+def tools_install_prefix(root_dir: Path) -> Path:
+    """Retourne le préfixe d'installation portable pour les outils (ex: PyInstaller)."""
+    return root_dir / ".usbide" / "tools"
+
+
+def tools_env(root_dir: Path, base_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Construit un environnement incluant les outils portables."""
+    env = dict(base_env) if base_env is not None else os.environ.copy()
+    bin_dir = codex_bin_dir(tools_install_prefix(root_dir))
+    path_value = env.get("PATH", "")
+    path_parts = path_value.split(os.pathsep) if path_value else []
+    # Ajoute le binaire des outils en tête du PATH pour garantir la portabilité.
+    if str(bin_dir) not in path_parts:
+        env["PATH"] = os.pathsep.join([str(bin_dir), *path_parts]) if path_parts else str(bin_dir)
+    return env
+
+
+def pyinstaller_available(root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> bool:
+    """Vérifie la présence du binaire `pyinstaller` dans le PATH."""
+    search_env = env
+    if root_dir is not None:
+        search_env = tools_env(root_dir, env)
+    return shutil.which("pyinstaller", path=search_env.get("PATH") if search_env else None) is not None
+
+
+def pyinstaller_install_argv(prefix: Path) -> list[str]:
+    """Commande pour installer PyInstaller via pip dans un préfixe portable."""
+    return [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--prefix",
+        str(prefix),
+        "pyinstaller",
+    ]
+
+
+def pyinstaller_build_argv(script: Path, dist_dir: Path, *, onefile: bool = True) -> list[str]:
+    """Commande pour générer un exécutable depuis un script Python."""
+    if not script.name.strip():
+        # Protection: un script vide n'est pas valide.
+        raise ValueError("script ne doit pas être vide")
+    argv = [
+        "pyinstaller",
+        "--noconfirm",
+        "--distpath",
+        str(dist_dir),
+        str(script),
+    ]
+    if onefile:
+        argv.insert(1, "--onefile")
+    return argv
+
+
 def codex_cli_available(root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> bool:
     """Vérifie la présence du binaire `codex` dans le PATH."""
     search_env = env
