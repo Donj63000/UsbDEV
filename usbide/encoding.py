@@ -49,7 +49,8 @@ def is_probably_binary(path: Path, sniff_bytes: int = 2048) -> bool:
         with path.open("rb") as fh:
             data = fh.read(sniff_bytes)
     except OSError:
-        return True
+        # On laisse remonter l'erreur pour distinguer "binaire" d'"inaccessible".
+        raise
 
     if b"\x00" in data:
         return True

@@ -27,6 +27,13 @@ class TestIsProbablyBinary(unittest.TestCase):
             path.write_text("abc", encoding="utf-8")
             self.assertFalse(is_probably_binary(path, sniff_bytes=0))
 
+    def test_acces_impossible_declenche_erreur(self) -> None:
+        # Un fichier inaccessible doit remonter une erreur pour un message précis.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "absent.bin"
+            with self.assertRaises(OSError):
+                is_probably_binary(path)
+
 
 class TestDetectTextEncoding(unittest.TestCase):
     def test_fallback_sur_fichier_py_inaccessible(self) -> None:

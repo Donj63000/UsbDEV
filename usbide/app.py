@@ -322,8 +322,13 @@ class USBIDEApp(App):
         if path.is_dir():
             return
 
-        if is_probably_binary(path):
-            self._log_ui(f"[yellow]Fichier binaire / non texte ignoré:[/yellow] {path}")
+        try:
+            if is_probably_binary(path):
+                self._log_ui(f"[yellow]Fichier binaire / non texte ignoré:[/yellow] {path}")
+                return
+        except OSError as e:
+            # Message dédié pour distinguer un binaire d'un accès impossible.
+            self._log_ui(f"[red]Impossible d'accéder au fichier:[/red] {path} ({e})")
             return
 
         encoding = detect_text_encoding(path)
@@ -403,10 +408,10 @@ class USBIDEApp(App):
         # Message explicite en français pour l'utilisateur.
         self._log_ui("[dim]arborescence rechargée[/dim]")
 
-    def action_save(self) -> None:
+    def action_save(self) -> bool:
         if not self.current:
             self._log_ui("[yellow]Aucun fichier ouvert.[/yellow]")
-            return
+            return False
 
         editor = self.query_one(TextArea)
         content = editor.text
@@ -417,14 +422,21 @@ class USBIDEApp(App):
             path.write_text(content, encoding=encoding)
             self.current.dirty = False
             self._log_ui(f"[green]Sauvegardé[/green] {path}")
+            return True
         except UnicodeEncodeError:
-            # fallback en utf-8
-            path.write_text(content, encoding="utf-8")
+            # Fallback en UTF-8 avec gestion d'erreur dédiée.
+            try:
+                path.write_text(content, encoding="utf-8")
+            except OSError as e:
+                self._log_ui(f"[red]Erreur sauvegarde (UTF-8):[/red] {path} ({e})")
+                return False
             self.current.encoding = "utf-8"
             self.current.dirty = False
             self._log_ui(f"[yellow]Sauvegardé en UTF-8 (fallback)[/yellow] {path}")
+            return True
         except OSError as e:
             self._log_ui(f"[red]Erreur sauvegarde:[/red] {path} ({e})")
+            return False
         finally:
             self._refresh_title()
 
@@ -438,8 +450,10 @@ class USBIDEApp(App):
             return
 
         # Sauver avant run
-        if self.current.dirty:
-            self.action_save()
+        if self.current.dirty and not self.action_save():
+            # Arrêt si la sauvegarde échoue pour éviter un run incohérent.
+            self._log_ui("[red]Exécution annulée : sauvegarde impossible.[/red]")
+            return
 
         script = self.current.path
         argv = python_run_argv(script)
@@ -548,8 +562,10 @@ class USBIDEApp(App):
             return
 
         # Sauver avant build.
-        if self.current.dirty:
-            self.action_save()
+        if self.current.dirty and not self.action_save():
+            # Arrêt si la sauvegarde échoue pour éviter un build incohérent.
+            self._log_ui("[red]Build annulé : sauvegarde impossible.[/red]")
+            return
 
         if not pyinstaller_available(self.root_dir, self._tools_env()):
             installed = await self._install_pyinstaller(force=False)
