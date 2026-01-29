@@ -1,56 +1,97 @@
-/* Styles UI principaux pour une interface plus agréable et lisible. */
+/* Styles UI principaux pour une interface plus élégante et lisible. */
 /* Remarque : commentaires en français conformément aux consignes. */
+
+/* Fond global pour réduire la fatigue visuelle. */
+Screen {
+  background: $surface-darken-1;
+  color: $text;
+}
+
+/* Conteneur principal avec marges et respiration. */
 #main {
   height: 1fr;
   background: $surface;
   color: $text;
+  padding: 1 1;
+  gap: 1;
 }
 
+/* Arborescence : lisible, contrastée et agréable au focus. */
 #tree {
   width: 34;
   border: heavy $primary;
   border-title: "Fichiers";
   background: $panel;
   color: $text;
+  padding: 1;
+  scrollbar-color: $primary-lighten-1;
+  scrollbar-background: $surface-darken-1;
 }
 
+#tree:focus {
+  border: heavy $primary-lighten-2;
+}
+
+/* Panneau de droite avec espacement cohérent. */
 #right {
   width: 1fr;
   background: $surface;
+  gap: 1;
 }
 
+/* Zone d'édition mieux encadrée pour le confort. */
 #editor {
   height: 1fr;
   border: heavy $secondary;
   border-title: "Éditeur";
   background: $surface;
   color: $text;
+  padding: 1;
+  scrollbar-color: $secondary-lighten-1;
+  scrollbar-background: $surface-darken-1;
 }
 
+#editor:focus {
+  border: heavy $secondary-lighten-2;
+}
+
+/* Champ de commande : compact et immédiatement visible. */
 #cmd {
   height: 3;
   border: heavy $accent;
   border-title: "Commande";
   background: $panel;
   color: $text;
+  padding: 0 1;
 }
 
+#cmd:focus {
+  border: heavy $accent-lighten-2;
+}
+
+/* Journal : espace généreux pour la lisibilité des logs. */
 #log {
   height: 12;
   border: heavy $success;
   border-title: "Journal";
   background: $panel;
   color: $text;
+  padding: 1;
+  scrollbar-color: $success-lighten-1;
+  scrollbar-background: $surface-darken-1;
 }
 
+/* En-tête et pied de page cohérents avec le branding. */
 Header {
-  background: $primary;
+  background: $primary-darken-1;
   color: $text;
   dock: top;
+  padding: 0 1;
 }
 
 Footer {
   background: $primary-darken-2;
   color: $text;
   dock: bottom;
+  padding: 0 1;
 }
