@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import AsyncIterator, Dict, Literal, Optional, Sequence, TypedDict
@@ -62,3 +63,14 @@ def windows_cmd_argv(command: str) -> list[str]:
 def python_run_argv(script: Path) -> list[str]:
     """Commande pour exécuter un script python avec l'interpréteur courant."""
     return [sys.executable, str(script)]
+
+
+def codex_cli_available() -> bool:
+    """Vérifie la présence du binaire `codex` dans le PATH."""
+    # Utilise shutil.which pour rester portable entre OS.
+    return shutil.which("codex") is not None
+
+
+def codex_login_argv() -> list[str]:
+    """Commande pour initier l'authentification Codex (via navigateur ChatGPT)."""
+    return ["codex", "auth", "login"]
