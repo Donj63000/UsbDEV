@@ -13,9 +13,13 @@ def detect_text_encoding(path: Path) -> str:
     Retourne un nom d'encodage Python (ex: 'utf-8').
     """
     if path.suffix.lower() == ".py":
-        with path.open("rb") as bf:
-            enc, _ = tokenize.detect_encoding(bf.readline)
-        return enc
+        try:
+            with path.open("rb") as bf:
+                enc, _ = tokenize.detect_encoding(bf.readline)
+            return enc
+        except OSError:
+            # Fallback sûr si le fichier n'est pas accessible.
+            return "utf-8"
 
     for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
         try:
@@ -23,6 +27,9 @@ def detect_text_encoding(path: Path) -> str:
             return enc
         except UnicodeDecodeError:
             continue
+        except OSError:
+            # Fallback sûr si le fichier n'est pas accessible.
+            return "utf-8"
 
     return "utf-8"
 

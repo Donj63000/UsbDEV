@@ -29,6 +29,10 @@ async def stream_subprocess(
       - {'kind': 'line', 'text': '...', 'returncode': None}
       - {'kind': 'exit', 'text': 'exit <rc>', 'returncode': <rc>}
     """
+    if not argv:
+        # Protection: une commande vide ne doit pas lancer de subprocess.
+        raise ValueError("argv ne doit pas être vide")
+
     proc = await asyncio.create_subprocess_exec(
         *argv,
         cwd=str(cwd) if cwd else None,

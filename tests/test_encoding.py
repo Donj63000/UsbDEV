@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from usbide.encoding import is_probably_binary
+from usbide.encoding import detect_text_encoding, is_probably_binary
 
 
 class TestIsProbablyBinary(unittest.TestCase):
@@ -26,3 +26,17 @@ class TestIsProbablyBinary(unittest.TestCase):
             path = Path(tmp_dir) / "texte.txt"
             path.write_text("abc", encoding="utf-8")
             self.assertFalse(is_probably_binary(path, sniff_bytes=0))
+
+
+class TestDetectTextEncoding(unittest.TestCase):
+    def test_fallback_sur_fichier_py_inaccessible(self) -> None:
+        # Un fichier .py manquant ne doit pas faire planter la détection.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "absent.py"
+            self.assertEqual(detect_text_encoding(path), "utf-8")
+
+    def test_fallback_sur_fichier_texte_inaccessible(self) -> None:
+        # Un fichier non-.py manquant doit retourner un encodage par défaut.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "absent.txt"
+            self.assertEqual(detect_text_encoding(path), "utf-8")
