@@ -1,7 +1,18 @@
+import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from usbide.runner import codex_cli_available, codex_login_argv, codex_status_argv, stream_subprocess
+from usbide.runner import (
+    codex_bin_dir,
+    codex_cli_available,
+    codex_env,
+    codex_install_argv,
+    codex_install_prefix,
+    codex_login_argv,
+    codex_status_argv,
+    stream_subprocess,
+)
 
 
 class TestStreamSubprocess(unittest.IsolatedAsyncioTestCase):
@@ -27,3 +38,34 @@ class TestCodexHelpers(unittest.TestCase):
             self.assertTrue(codex_cli_available())
         with patch("usbide.runner.shutil.which", return_value=None):
             self.assertFalse(codex_cli_available())
+
+    def test_codex_cli_available_avec_env(self) -> None:
+        # La disponibilité doit tenir compte du PATH fourni.
+        root_dir = Path("/tmp/usbide")
+        env = {"PATH": "/bin"}
+        expected_bin = str(codex_bin_dir(codex_install_prefix(root_dir)))
+        expected_path = os.pathsep.join([expected_bin, env["PATH"]])
+        with patch("usbide.runner.shutil.which", return_value="/usr/bin/codex") as which:
+            self.assertTrue(codex_cli_available(root_dir, env))
+            which.assert_called_once_with("codex", path=expected_path)
+
+    def test_codex_env_prepend_path(self) -> None:
+        # L'environnement Codex doit préfixer le PATH avec le binaire portable.
+        root_dir = Path("/tmp/usbide")
+        base_env = {"PATH": "/bin"}
+        env = codex_env(root_dir, base_env)
+        expected_bin = str(codex_bin_dir(codex_install_prefix(root_dir)))
+        self.assertTrue(env["PATH"].startswith(expected_bin + os.pathsep))
+        self.assertEqual(base_env["PATH"], "/bin")
+
+    def test_codex_install_argv(self) -> None:
+        # La commande pip doit cibler le préfixe portable.
+        prefix = Path("/tmp/usbide/.usbide/codex")
+        argv = codex_install_argv(prefix, "codex")
+        self.assertIn("--prefix", argv)
+        self.assertIn(str(prefix), argv)
+
+    def test_codex_install_argv_rejecte_vide(self) -> None:
+        # Un nom de package vide doit déclencher une erreur.
+        with self.assertRaises(ValueError):
+            codex_install_argv(Path("/tmp/usbide/.usbide/codex"), " ")
