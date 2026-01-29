@@ -11,7 +11,14 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import DirectoryTree, Footer, Header, Input, RichLog, TextArea
 
 from usbide.encoding import detect_text_encoding, is_probably_binary
-from usbide.runner import codex_cli_available, codex_login_argv, python_run_argv, stream_subprocess, windows_cmd_argv
+from usbide.runner import (
+    codex_cli_available,
+    codex_login_argv,
+    codex_status_argv,
+    python_run_argv,
+    stream_subprocess,
+    windows_cmd_argv,
+)
 
 
 @dataclass
@@ -34,6 +41,7 @@ class USBIDEApp(App):
         ("ctrl+l", "clear_log", "Clear log"),
         ("ctrl+r", "reload_tree", "Reload tree"),
         ("ctrl+k", "codex_login", "Codex login"),
+        ("ctrl+t", "codex_check", "Codex check"),
         ("ctrl+q", "quit", "Quit"),
     ]
 
@@ -276,3 +284,40 @@ class USBIDEApp(App):
             self._log_ui(f"[red]CLI Codex introuvable:[/red] {e}")
         except Exception as e:
             self._log_ui(f"[red]Erreur exécution Codex:[/red] {e}")
+
+    async def action_codex_check(self) -> None:
+        """Vérifie que Codex est utilisable (CLI présent + statut auth)."""
+        if not codex_cli_available():
+            self._log_ui(
+                "[red]CLI Codex introuvable.[/red] Installez-le puis relancez la commande."
+            )
+            return
+
+        self._log_ui("[b]Vérification Codex[/b] : contrôle du statut d'authentification.")
+
+        argv = codex_status_argv()
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+
+        env = os.environ.copy()
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+
+        exit_code: Optional[int] = None
+        try:
+            async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+                if ev["kind"] == "line":
+                    self._log_output(ev["text"])
+                else:
+                    exit_code = ev["returncode"]
+                    # Message explicite pour aider l'utilisateur.
+                    if exit_code == 0:
+                        self._log_ui("[green]Codex prêt à l'emploi.[/green]")
+                    else:
+                        self._log_ui(
+                            "[yellow]Codex semble non authentifié ou en erreur.[/yellow] "
+                            "Relancez Ctrl+K pour vous connecter."
+                        )
+        except FileNotFoundError as e:
+            self._log_ui(f"[red]CLI Codex introuvable:[/red] {e}")
+        except Exception as e:
+            self._log_ui(f"[red]Erreur vérification Codex:[/red] {e}")
