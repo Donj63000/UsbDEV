@@ -102,7 +102,8 @@ class USBIDEApp(App):
 
     def on_mount(self) -> None:
         self._log_ui(
-            f"[b]USBIDE[/b]\nRoot: {self.root_dir}\n"
+            # Affichage de bienvenue aligné sur le nom produit.
+            f"[b]ValDev Pro v1[/b]\nRoot: {self.root_dir}\n"
             "Ctrl+S save • F5 run • Ctrl+R reload tree • Ctrl+L clear log • "
             "Ctrl+I install Codex • Ctrl+D dev tools • Ctrl+E build EXE • Ctrl+Q quit\n"
             "Astuce: utilise le champ `>` pour lancer des commandes shell (dir, git, etc.)."
@@ -121,11 +122,13 @@ class USBIDEApp(App):
     # -------- UI helpers --------
     def _refresh_title(self) -> None:
         if not self.current:
-            self.title = "USBIDE"
+            # Nom officiel affiché en haut du TUI.
+            self.title = "ValDev Pro v1"
             self.sub_title = str(self.root_dir)
             return
         dirty = " *" if self.current.dirty else ""
-        self.title = f"USBIDE{dirty}"
+        # Indique un fichier modifié tout en gardant le branding.
+        self.title = f"ValDev Pro v1{dirty}"
         self.sub_title = f"{self.current.path}  ({self.current.encoding})"
 
     def _codex_env(self) -> dict[str, str]:
