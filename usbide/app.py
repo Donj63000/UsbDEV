@@ -72,12 +72,24 @@ class USBIDEApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="main"):
-            yield DirectoryTree(str(self.root_dir), id="tree")
+            tree = DirectoryTree(str(self.root_dir), id="tree")
+            # Titre de bordure défini via l'API Textual (pas disponible en CSS).
+            tree.border_title = "Fichiers"
+            yield tree
             with Vertical(id="right"):
-                yield self._make_editor()
-                yield Input(placeholder="> commande shell (Entrée pour exécuter)", id="cmd")
+                editor = self._make_editor()
+                # Titre de bordure défini via l'API Textual (pas disponible en CSS).
+                editor.border_title = "Éditeur"
+                yield editor
+                cmd = Input(placeholder="> commande shell (Entrée pour exécuter)", id="cmd")
+                # Titre de bordure défini via l'API Textual (pas disponible en CSS).
+                cmd.border_title = "Commande"
+                yield cmd
                 # markup=True pour nos messages; on escape la sortie externe
-                yield RichLog(id="log", markup=True)
+                log = RichLog(id="log", markup=True)
+                # Titre de bordure défini via l'API Textual (pas disponible en CSS).
+                log.border_title = "Journal"
+                yield log
         yield Footer()
 
     def _make_editor(self) -> TextArea:
@@ -102,6 +114,8 @@ class USBIDEApp(App):
         return editor
 
     def on_mount(self) -> None:
+        # Prépare les dossiers portables avant toute opération.
+        self._ensure_portable_dirs()
         self._log_ui(
             # Affichage de bienvenue aligné sur le nom produit.
             f"[b]ValDev Pro v1[/b]\nRoot: {self.root_dir}\n"
@@ -133,11 +147,47 @@ class USBIDEApp(App):
         self.title = f"ValDev Pro v1{dirty}"
         self.sub_title = f"{self.current.path}  ({self.current.encoding})"
 
+    def _ensure_portable_dirs(self) -> None:
+        """Crée les dossiers portables nécessaires (cache/tmp/config)."""
+        targets = (
+            self.root_dir / "cache" / "pip",
+            self.root_dir / "cache" / "pycache",
+            self.root_dir / "tmp",
+            self.root_dir / "codex_home",
+        )
+        for path in targets:
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                # Avertit sans bloquer l'UI si un dossier ne peut pas être créé.
+                self._log_ui(
+                    f"[yellow]Impossible de créer[/yellow] {path} ({exc})"
+                )
+
+    def _portable_env(self, env: dict[str, str]) -> dict[str, str]:
+        """Force les variables d'environnement pour écrire sur la clé."""
+        # On force les chemins pour garantir le mode "zéro trace".
+        env["PIP_CACHE_DIR"] = str(self.root_dir / "cache" / "pip")
+        env["PYTHONPYCACHEPREFIX"] = str(self.root_dir / "cache" / "pycache")
+        env["TEMP"] = str(self.root_dir / "tmp")
+        env["TMP"] = str(self.root_dir / "tmp")
+        env["PYTHONNOUSERSITE"] = "1"
+        env["CODEX_HOME"] = str(self.root_dir / "codex_home")
+        return env
+
+    def _wheelhouse_path(self) -> Optional[Path]:
+        """Retourne le chemin du wheelhouse offline s'il existe."""
+        wheelhouse = self.root_dir / "tools" / "wheels"
+        if wheelhouse.is_dir():
+            return wheelhouse
+        return None
+
     def _codex_env(self) -> dict[str, str]:
         """Construit l'environnement (PATH + encodage) pour les commandes Codex."""
         env = os.environ.copy()
         env.setdefault("PYTHONUTF8", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        env = self._portable_env(env)
         return codex_env(self.root_dir, env)
 
     def _tools_env(self) -> dict[str, str]:
@@ -145,6 +195,7 @@ class USBIDEApp(App):
         env = os.environ.copy()
         env.setdefault("PYTHONUTF8", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        env = self._portable_env(env)
         return tools_env(self.root_dir, env)
 
     def _codex_auto_install_enabled(self) -> bool:
@@ -187,7 +238,17 @@ class USBIDEApp(App):
         )
 
         try:
-            argv = pip_install_argv(prefix, packages)
+            wheelhouse = self._wheelhouse_path()
+            if wheelhouse is not None:
+                self._log_ui(
+                    f"[dim]Wheelhouse offline détecté : {rich_escape(str(wheelhouse))}[/dim]"
+                )
+            argv = pip_install_argv(
+                prefix,
+                packages,
+                find_links=wheelhouse,
+                no_index=wheelhouse is not None,
+            )
         except ValueError as e:
             self._log_ui(f"[red]Liste d'outils invalide:[/red] {e}")
             return False
@@ -241,7 +302,17 @@ class USBIDEApp(App):
         )
 
         try:
-            argv = codex_install_argv(prefix, package)
+            wheelhouse = self._wheelhouse_path()
+            if wheelhouse is not None:
+                self._log_ui(
+                    f"[dim]Wheelhouse offline détecté : {rich_escape(str(wheelhouse))}[/dim]"
+                )
+            argv = codex_install_argv(
+                prefix,
+                package,
+                find_links=wheelhouse,
+                no_index=wheelhouse is not None,
+            )
         except ValueError as e:
             self._log_ui(f"[red]Package Codex invalide:[/red] {e}")
             return False
@@ -289,7 +360,16 @@ class USBIDEApp(App):
             f"prefix={rich_escape(str(prefix))}"
         )
 
-        argv = pyinstaller_install_argv(prefix)
+        wheelhouse = self._wheelhouse_path()
+        if wheelhouse is not None:
+            self._log_ui(
+                f"[dim]Wheelhouse offline détecté : {rich_escape(str(wheelhouse))}[/dim]"
+            )
+        argv = pyinstaller_install_argv(
+            prefix,
+            find_links=wheelhouse,
+            no_index=wheelhouse is not None,
+        )
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
         try:
@@ -385,6 +465,7 @@ class USBIDEApp(App):
         env = os.environ.copy()
         env.setdefault("PYTHONUTF8", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        env = self._portable_env(env)
 
         try:
             async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
@@ -464,6 +545,7 @@ class USBIDEApp(App):
         env = os.environ.copy()
         env.setdefault("PYTHONUTF8", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        env = self._portable_env(env)
 
         try:
             async for ev in stream_subprocess(argv, cwd=script.parent, env=env):
@@ -490,10 +572,9 @@ class USBIDEApp(App):
             "dans votre navigateur. Suivez les instructions affichées."
         )
 
-        argv = codex_login_argv()
-        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
-
         env = self._codex_env()
+        argv = codex_login_argv(self.root_dir, env)
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
         try:
             async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
@@ -518,10 +599,9 @@ class USBIDEApp(App):
 
         self._log_ui("[b]Vérification Codex[/b] : contrôle du statut d'authentification.")
 
-        argv = codex_status_argv()
-        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
-
         env = self._codex_env()
+        argv = codex_status_argv(self.root_dir, env)
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
         exit_code: Optional[int] = None
         try:
@@ -578,10 +658,18 @@ class USBIDEApp(App):
 
         script = self.current.path
         dist_dir = self.root_dir / "dist"
+        build_dir = self.root_dir / "build"
         dist_dir.mkdir(parents=True, exist_ok=True)
+        build_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            argv = pyinstaller_build_argv(script, dist_dir, onefile=True)
+            argv = pyinstaller_build_argv(
+                script,
+                dist_dir,
+                onefile=False,
+                work_dir=build_dir,
+                spec_dir=self.root_dir,
+            )
         except ValueError as e:
             self._log_ui(f"[red]Script invalide:[/red] {e}")
             return

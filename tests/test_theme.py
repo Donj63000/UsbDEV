@@ -1,4 +1,5 @@
 from pathlib import Path
+import tempfile
 import unittest
 
 from usbide.app import USBIDEApp
@@ -32,3 +33,16 @@ class TestThemeFrancais(unittest.TestCase):
         for selector in ("Screen", "#main", "#tree:focus", "#editor:focus", "#cmd:focus"):
             with self.subTest(selector=selector):
                 self.assertIn(selector, css_text)
+
+
+class TestTitresBordures(unittest.IsolatedAsyncioTestCase):
+    async def test_titres_bordures_definis(self) -> None:
+        # Vérifie que les titres de bordure sont définis via l'API Textual.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = USBIDEApp(root_dir=Path(tmp_dir))
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                self.assertEqual(app.query_one("#tree").border_title, "Fichiers")
+                self.assertEqual(app.query_one("#editor").border_title, "Éditeur")
+                self.assertEqual(app.query_one("#cmd").border_title, "Commande")
+                self.assertEqual(app.query_one("#log").border_title, "Journal")

@@ -34,11 +34,15 @@ class TestStreamSubprocess(unittest.IsolatedAsyncioTestCase):
 class TestCodexHelpers(unittest.TestCase):
     def test_codex_login_argv(self) -> None:
         # Vérifie la commande d'authentification attendue.
-        self.assertEqual(codex_login_argv(), ["codex", "auth", "login"])
+        argv = codex_login_argv()
+        self.assertIn(argv[0], {"codex", "codex.cmd"})
+        self.assertEqual(argv[1:], ["login"])
 
     def test_codex_status_argv(self) -> None:
         # Vérifie la commande de statut d'authentification attendue.
-        self.assertEqual(codex_status_argv(), ["codex", "auth", "status"])
+        argv = codex_status_argv()
+        self.assertIn(argv[0], {"codex", "codex.cmd"})
+        self.assertEqual(argv[1:], ["login", "status"])
 
     def test_codex_cli_available(self) -> None:
         # Le helper doit refléter la disponibilité du binaire.
@@ -55,7 +59,8 @@ class TestCodexHelpers(unittest.TestCase):
         expected_path = os.pathsep.join([expected_bin, env["PATH"]])
         with patch("usbide.runner.shutil.which", return_value="/usr/bin/codex") as which:
             self.assertTrue(codex_cli_available(root_dir, env))
-            which.assert_called_once_with("codex", path=expected_path)
+            self.assertEqual(which.call_args.kwargs.get("path"), expected_path)
+            self.assertIn(which.call_args.args[0], {"codex", "codex.cmd"})
 
     def test_codex_env_prepend_path(self) -> None:
         # L'environnement Codex doit préfixer le PATH avec le binaire portable.
@@ -115,6 +120,15 @@ class TestToolsHelpers(unittest.TestCase):
         self.assertIn("ruff", argv)
         self.assertIn("black", argv)
 
+    def test_pip_install_argv_offline(self) -> None:
+        # Le mode offline doit ajouter --no-index et --find-links.
+        prefix = Path("/tmp/usbide/.usbide/tools")
+        wheelhouse = Path("/tmp/usbide/tools/wheels")
+        argv = pip_install_argv(prefix, ["ruff"], find_links=wheelhouse, no_index=True)
+        self.assertIn("--no-index", argv)
+        self.assertIn("--find-links", argv)
+        self.assertIn(str(wheelhouse), argv)
+
     def test_pip_install_argv_rejecte_vide(self) -> None:
         # Une liste vide doit déclencher une erreur.
         with self.assertRaises(ValueError):
@@ -128,6 +142,31 @@ class TestToolsHelpers(unittest.TestCase):
         self.assertIn(str(script), argv)
         self.assertIn(str(dist_dir), argv)
         self.assertIn("--onefile", argv)
+        self.assertNotIn("--onedir", argv)
+
+    def test_pyinstaller_build_argv_onedir_par_defaut(self) -> None:
+        # Par défaut, on privilégie --onedir pour limiter les faux positifs AV.
+        script = Path("/tmp/usbide/app.py")
+        dist_dir = Path("/tmp/usbide/dist")
+        argv = pyinstaller_build_argv(script, dist_dir)
+        self.assertIn("--onedir", argv)
+
+    def test_pyinstaller_build_argv_work_spec(self) -> None:
+        # Les chemins work/spec doivent être inclus si fournis.
+        script = Path("/tmp/usbide/app.py")
+        dist_dir = Path("/tmp/usbide/dist")
+        work_dir = Path("/tmp/usbide/build")
+        spec_dir = Path("/tmp/usbide")
+        argv = pyinstaller_build_argv(
+            script,
+            dist_dir,
+            work_dir=work_dir,
+            spec_dir=spec_dir,
+        )
+        self.assertIn("--workpath", argv)
+        self.assertIn(str(work_dir), argv)
+        self.assertIn("--specpath", argv)
+        self.assertIn(str(spec_dir), argv)
 
     def test_pyinstaller_build_argv_rejecte_vide(self) -> None:
         # Un script vide doit déclencher une erreur.

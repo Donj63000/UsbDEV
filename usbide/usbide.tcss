@@ -13,17 +13,17 @@ Screen {
   background: $surface;
   color: $text;
   padding: 1 1;
-  gap: 1;
 }
 
 /* Arborescence : lisible, contrastée et agréable au focus. */
 #tree {
   width: 34;
   border: heavy $primary;
-  border-title: "Fichiers";
   background: $panel;
   color: $text;
   padding: 1;
+  /* Remplace le `gap` non supporté par une marge externe. */
+  margin: 0 1 0 0;
   scrollbar-color: $primary-lighten-1;
   scrollbar-background: $surface-darken-1;
 }
@@ -36,17 +36,17 @@ Screen {
 #right {
   width: 1fr;
   background: $surface;
-  gap: 1;
 }
 
 /* Zone d'édition mieux encadrée pour le confort. */
 #editor {
   height: 1fr;
   border: heavy $secondary;
-  border-title: "Éditeur";
   background: $surface;
   color: $text;
   padding: 1;
+  /* Espace vertical entre l'éditeur et la commande. */
+  margin: 0 0 1 0;
   scrollbar-color: $secondary-lighten-1;
   scrollbar-background: $surface-darken-1;
 }
@@ -59,10 +59,11 @@ Screen {
 #cmd {
   height: 3;
   border: heavy $accent;
-  border-title: "Commande";
   background: $panel;
   color: $text;
   padding: 0 1;
+  /* Espace vertical entre la commande et le journal. */
+  margin: 0 0 1 0;
 }
 
 #cmd:focus {
@@ -73,7 +74,6 @@ Screen {
 #log {
   height: 12;
   border: heavy $success;
-  border-title: "Journal";
   background: $panel;
   color: $text;
   padding: 1;

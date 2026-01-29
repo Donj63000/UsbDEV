@@ -137,18 +137,29 @@ def pyinstaller_available(root_dir: Optional[Path] = None, env: Optional[Dict[st
     return tool_available("pyinstaller", root_dir=root_dir, env=env)
 
 
-def pyinstaller_install_argv(prefix: Path) -> list[str]:
+def pyinstaller_install_argv(
+    prefix: Path,
+    *,
+    find_links: Optional[Path] = None,
+    no_index: bool = False,
+) -> list[str]:
     """Commande pour installer PyInstaller via pip dans un préfixe portable."""
-    return pip_install_argv(prefix, ["pyinstaller"])
+    return pip_install_argv(prefix, ["pyinstaller"], find_links=find_links, no_index=no_index)
 
 
-def pip_install_argv(prefix: Path, packages: Iterable[str]) -> list[str]:
+def pip_install_argv(
+    prefix: Path,
+    packages: Iterable[str],
+    *,
+    find_links: Optional[Path] = None,
+    no_index: bool = False,
+) -> list[str]:
     """Commande pour installer des packages via pip dans un préfixe portable."""
     cleaned = [pkg.strip() for pkg in packages if pkg.strip()]
     if not cleaned:
         # Protection: il faut au moins un package valide.
         raise ValueError("packages ne doit pas être vide")
-    return [
+    argv = [
         sys.executable,
         "-m",
         "pip",
@@ -156,11 +167,23 @@ def pip_install_argv(prefix: Path, packages: Iterable[str]) -> list[str]:
         "--upgrade",
         "--prefix",
         str(prefix),
-        *cleaned,
     ]
+    if no_index:
+        argv.append("--no-index")
+    if find_links is not None:
+        argv.extend(["--find-links", str(find_links)])
+    argv.extend(cleaned)
+    return argv
 
 
-def pyinstaller_build_argv(script: Path, dist_dir: Path, *, onefile: bool = True) -> list[str]:
+def pyinstaller_build_argv(
+    script: Path,
+    dist_dir: Path,
+    *,
+    onefile: bool = False,
+    work_dir: Optional[Path] = None,
+    spec_dir: Optional[Path] = None,
+) -> list[str]:
     """Commande pour générer un exécutable depuis un script Python."""
     if not script.name.strip():
         # Protection: un script vide n'est pas valide.
@@ -168,13 +191,34 @@ def pyinstaller_build_argv(script: Path, dist_dir: Path, *, onefile: bool = True
     argv = [
         "pyinstaller",
         "--noconfirm",
+        "--onedir",
         "--distpath",
         str(dist_dir),
-        str(script),
     ]
     if onefile:
+        # En mode onefile, on remplace explicitement le mode onedir.
+        argv.remove("--onedir")
         argv.insert(1, "--onefile")
+    if work_dir is not None:
+        argv.extend(["--workpath", str(work_dir)])
+    if spec_dir is not None:
+        argv.extend(["--specpath", str(spec_dir)])
+    argv.append(str(script))
     return argv
+
+
+def _codex_executable_name(
+    root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None
+) -> str:
+    """Retourne l'exécutable Codex le plus adapté à la plateforme."""
+    # Sous Windows, on préfère explicitement .cmd pour éviter les restrictions PowerShell.
+    preferred = "codex.cmd" if os.name == "nt" else "codex"
+    search_env = env
+    if root_dir is not None:
+        search_env = codex_env(root_dir, env)
+    if shutil.which(preferred, path=search_env.get("PATH") if search_env else None) is not None:
+        return preferred
+    return "codex"
 
 
 def codex_cli_available(root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> bool:
@@ -183,31 +227,33 @@ def codex_cli_available(root_dir: Optional[Path] = None, env: Optional[Dict[str,
     if root_dir is not None:
         search_env = codex_env(root_dir, env)
     # Utilise shutil.which pour rester portable entre OS.
-    return shutil.which("codex", path=search_env.get("PATH") if search_env else None) is not None
+    path = search_env.get("PATH") if search_env else None
+    return shutil.which(_codex_executable_name(root_dir, env), path=path) is not None
 
 
-def codex_login_argv() -> list[str]:
+def codex_login_argv(
+    root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None
+) -> list[str]:
     """Commande pour initier l'authentification Codex (via navigateur ChatGPT)."""
-    return ["codex", "auth", "login"]
+    return [_codex_executable_name(root_dir, env), "login"]
 
 
-def codex_status_argv() -> list[str]:
+def codex_status_argv(
+    root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None
+) -> list[str]:
     """Commande pour vérifier l'état d'authentification Codex."""
-    return ["codex", "auth", "status"]
+    return [_codex_executable_name(root_dir, env), "login", "status"]
 
 
-def codex_install_argv(prefix: Path, package: str) -> list[str]:
+def codex_install_argv(
+    prefix: Path,
+    package: str,
+    *,
+    find_links: Optional[Path] = None,
+    no_index: bool = False,
+) -> list[str]:
     """Commande pour installer Codex via pip dans un préfixe portable."""
     if not package.strip():
         # Protection: un nom de package vide n'est pas valide.
         raise ValueError("package ne doit pas être vide")
-    return [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "--prefix",
-        str(prefix),
-        package,
-    ]
+    return pip_install_argv(prefix, [package], find_links=find_links, no_index=no_index)
