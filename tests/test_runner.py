@@ -11,7 +11,12 @@ from usbide.runner import (
     codex_install_prefix,
     codex_login_argv,
     codex_status_argv,
+    pyinstaller_available,
+    pyinstaller_build_argv,
+    pyinstaller_install_argv,
     stream_subprocess,
+    tools_env,
+    tools_install_prefix,
 )
 
 
@@ -69,3 +74,45 @@ class TestCodexHelpers(unittest.TestCase):
         # Un nom de package vide doit déclencher une erreur.
         with self.assertRaises(ValueError):
             codex_install_argv(Path("/tmp/usbide/.usbide/codex"), " ")
+
+
+class TestToolsHelpers(unittest.TestCase):
+    def test_tools_env_prepend_path(self) -> None:
+        # L'environnement outils doit préfixer le PATH avec le binaire portable.
+        root_dir = Path("/tmp/usbide")
+        base_env = {"PATH": "/bin"}
+        env = tools_env(root_dir, base_env)
+        expected_bin = str(codex_bin_dir(tools_install_prefix(root_dir)))
+        self.assertTrue(env["PATH"].startswith(expected_bin + os.pathsep))
+        self.assertEqual(base_env["PATH"], "/bin")
+
+    def test_pyinstaller_install_argv(self) -> None:
+        # La commande pip doit cibler le préfixe outils.
+        prefix = Path("/tmp/usbide/.usbide/tools")
+        argv = pyinstaller_install_argv(prefix)
+        self.assertIn("--prefix", argv)
+        self.assertIn(str(prefix), argv)
+
+    def test_pyinstaller_build_argv(self) -> None:
+        # La commande PyInstaller doit inclure le script et le dist.
+        script = Path("/tmp/usbide/app.py")
+        dist_dir = Path("/tmp/usbide/dist")
+        argv = pyinstaller_build_argv(script, dist_dir, onefile=True)
+        self.assertIn(str(script), argv)
+        self.assertIn(str(dist_dir), argv)
+        self.assertIn("--onefile", argv)
+
+    def test_pyinstaller_build_argv_rejecte_vide(self) -> None:
+        # Un script vide doit déclencher une erreur.
+        with self.assertRaises(ValueError):
+            pyinstaller_build_argv(Path(""), Path("/tmp/usbide/dist"))
+
+    def test_pyinstaller_available_avec_env(self) -> None:
+        # La disponibilité doit tenir compte du PATH fourni.
+        root_dir = Path("/tmp/usbide")
+        env = {"PATH": "/bin"}
+        expected_bin = str(codex_bin_dir(tools_install_prefix(root_dir)))
+        expected_path = os.pathsep.join([expected_bin, env["PATH"]])
+        with patch("usbide.runner.shutil.which", return_value="/usr/bin/pyinstaller") as which:
+            self.assertTrue(pyinstaller_available(root_dir, env))
+            which.assert_called_once_with("pyinstaller", path=expected_path)

@@ -19,8 +19,13 @@ from usbide.runner import (
     codex_install_prefix,
     codex_login_argv,
     codex_status_argv,
+    pyinstaller_available,
+    pyinstaller_build_argv,
+    pyinstaller_install_argv,
     python_run_argv,
     stream_subprocess,
+    tools_env,
+    tools_install_prefix,
     windows_cmd_argv,
 )
 
@@ -47,6 +52,7 @@ class USBIDEApp(App):
         ("ctrl+k", "codex_login", "Codex login"),
         ("ctrl+t", "codex_check", "Codex check"),
         ("ctrl+i", "codex_install", "Codex install"),
+        ("ctrl+e", "build_exe", "Build EXE"),
         ("ctrl+q", "quit", "Quit"),
     ]
 
@@ -56,6 +62,7 @@ class USBIDEApp(App):
         self.current: Optional[OpenFile] = None
         self._loading_editor: bool = False  # évite de marquer dirty quand on charge un fichier
         self._codex_install_attempted: bool = False  # évite de répéter l'installation automatique
+        self._pyinstaller_install_attempted: bool = False  # évite de répéter l'installation automatique
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -93,7 +100,7 @@ class USBIDEApp(App):
         self._log_ui(
             f"[b]USBIDE[/b]\nRoot: {self.root_dir}\n"
             "Ctrl+S save • F5 run • Ctrl+R reload tree • Ctrl+L clear log • "
-            "Ctrl+I install Codex • Ctrl+Q quit\n"
+            "Ctrl+I install Codex • Ctrl+E build EXE • Ctrl+Q quit\n"
             "Astuce: utilise le champ `>` pour lancer des commandes shell (dir, git, etc.)."
         )
         self._refresh_title()
@@ -123,6 +130,13 @@ class USBIDEApp(App):
         env.setdefault("PYTHONUTF8", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
         return codex_env(self.root_dir, env)
+
+    def _tools_env(self) -> dict[str, str]:
+        """Construit l'environnement (PATH + encodage) pour les outils portables."""
+        env = os.environ.copy()
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        return tools_env(self.root_dir, env)
 
     def _codex_auto_install_enabled(self) -> bool:
         """Indique si l'installation automatique de Codex est autorisée."""
@@ -182,6 +196,50 @@ class USBIDEApp(App):
         self._log_ui(
             "[yellow]Installation Codex terminée mais binaire non détecté.[/yellow] "
             "Vérifiez la connexion réseau ou le package configuré."
+        )
+        return False
+
+    async def _install_pyinstaller(self, *, force: bool = False) -> bool:
+        """Installe PyInstaller dans le préfixe portable si nécessaire."""
+        env = self._tools_env()
+        if not force and pyinstaller_available(self.root_dir, env):
+            return True
+        if not force and self._pyinstaller_install_attempted:
+            return False
+
+        self._pyinstaller_install_attempted = True
+        prefix = tools_install_prefix(self.root_dir)
+        bin_dir = codex_bin_dir(prefix)
+        prefix.mkdir(parents=True, exist_ok=True)
+
+        self._log_ui(
+            "[b]Installation PyInstaller[/b] : "
+            f"prefix={rich_escape(str(prefix))}"
+        )
+
+        argv = pyinstaller_install_argv(prefix)
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+
+        try:
+            async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+                if ev["kind"] == "line":
+                    self._log_output(ev["text"])
+                else:
+                    self._log_ui(f"[dim]{ev['text']}[/dim]")
+        except Exception as e:
+            self._log_ui(f"[red]Erreur installation PyInstaller:[/red] {e}")
+            return False
+
+        if pyinstaller_available(self.root_dir, env):
+            self._log_ui(
+                "[green]PyInstaller installé.[/green] "
+                f"Binaire attendu dans {rich_escape(str(bin_dir))}."
+            )
+            return True
+
+        self._log_ui(
+            "[yellow]Installation PyInstaller terminée mais binaire non détecté.[/yellow] "
+            "Vérifiez la connexion réseau ou le cache pip."
         )
         return False
 
@@ -400,3 +458,50 @@ class USBIDEApp(App):
     async def action_codex_install(self) -> None:
         """Installe ou met à jour Codex dans l'environnement portable."""
         await self._install_codex(force=True)
+
+    async def action_build_exe(self) -> None:
+        """Construit un exécutable via PyInstaller pour le script courant."""
+        if not self.current:
+            self._log_ui("[yellow]Aucun fichier ouvert.[/yellow]")
+            return
+
+        if self.current.path.suffix.lower() != ".py":
+            self._log_ui("[yellow]La génération d'exe nécessite un fichier .py[/yellow]")
+            return
+
+        # Sauver avant build.
+        if self.current.dirty:
+            self.action_save()
+
+        if not pyinstaller_available(self.root_dir, self._tools_env()):
+            installed = await self._install_pyinstaller(force=False)
+            if not installed:
+                self._log_ui(
+                    "[red]PyInstaller introuvable.[/red] "
+                    "Installez-le puis relancez la commande."
+                )
+                return
+
+        script = self.current.path
+        dist_dir = self.root_dir / "dist"
+        dist_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            argv = pyinstaller_build_argv(script, dist_dir, onefile=True)
+        except ValueError as e:
+            self._log_ui(f"[red]Script invalide:[/red] {e}")
+            return
+
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+
+        env = self._tools_env()
+        try:
+            async for ev in stream_subprocess(argv, cwd=script.parent, env=env):
+                if ev["kind"] == "line":
+                    self._log_output(ev["text"])
+                else:
+                    self._log_ui(f"[dim]{ev['text']}[/dim]")
+        except FileNotFoundError as e:
+            self._log_ui(f"[red]PyInstaller introuvable:[/red] {e}")
+        except Exception as e:
+            self._log_ui(f"[red]Erreur build EXE:[/red] {e}")
