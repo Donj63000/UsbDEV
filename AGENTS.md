@@ -22,5 +22,5 @@
 - Organisation du code dans le paquet `usbide/` avec modules applicatifs dédiés.  
 
 ## Exigences de performance cognitive
-- Toujours **analyser le contexte** et **proposer un plan multi‑étapes** avant d'agir.  
+- Toujours **analyser le contexte** avant d'agir.  
 - Vérifier les hypothèses, couvrir les cas limites et expliciter les choix techniques.  
