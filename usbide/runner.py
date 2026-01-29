@@ -65,10 +65,35 @@ def python_run_argv(script: Path) -> list[str]:
     return [sys.executable, str(script)]
 
 
-def codex_cli_available() -> bool:
+def codex_install_prefix(root_dir: Path) -> Path:
+    """Retourne le préfixe d'installation portable pour Codex."""
+    return root_dir / ".usbide" / "codex"
+
+
+def codex_bin_dir(prefix: Path) -> Path:
+    """Retourne le répertoire des scripts selon l'OS."""
+    return prefix / ("Scripts" if os.name == "nt" else "bin")
+
+
+def codex_env(root_dir: Path, base_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Construit un environnement incluant le binaire Codex portable."""
+    env = dict(base_env) if base_env is not None else os.environ.copy()
+    bin_dir = codex_bin_dir(codex_install_prefix(root_dir))
+    path_value = env.get("PATH", "")
+    path_parts = path_value.split(os.pathsep) if path_value else []
+    # Ajoute le binaire portable en tête du PATH.
+    if str(bin_dir) not in path_parts:
+        env["PATH"] = os.pathsep.join([str(bin_dir), *path_parts]) if path_parts else str(bin_dir)
+    return env
+
+
+def codex_cli_available(root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> bool:
     """Vérifie la présence du binaire `codex` dans le PATH."""
+    search_env = env
+    if root_dir is not None:
+        search_env = codex_env(root_dir, env)
     # Utilise shutil.which pour rester portable entre OS.
-    return shutil.which("codex") is not None
+    return shutil.which("codex", path=search_env.get("PATH") if search_env else None) is not None
 
 
 def codex_login_argv() -> list[str]:
@@ -79,3 +104,20 @@ def codex_login_argv() -> list[str]:
 def codex_status_argv() -> list[str]:
     """Commande pour vérifier l'état d'authentification Codex."""
     return ["codex", "auth", "status"]
+
+
+def codex_install_argv(prefix: Path, package: str) -> list[str]:
+    """Commande pour installer Codex via pip dans un préfixe portable."""
+    if not package.strip():
+        # Protection: un nom de package vide n'est pas valide.
+        raise ValueError("package ne doit pas être vide")
+    return [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--prefix",
+        str(prefix),
+        package,
+    ]

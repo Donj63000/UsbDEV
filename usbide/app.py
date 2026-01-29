@@ -12,7 +12,11 @@ from textual.widgets import DirectoryTree, Footer, Header, Input, RichLog, TextA
 
 from usbide.encoding import detect_text_encoding, is_probably_binary
 from usbide.runner import (
+    codex_bin_dir,
     codex_cli_available,
+    codex_env,
+    codex_install_argv,
+    codex_install_prefix,
     codex_login_argv,
     codex_status_argv,
     python_run_argv,
@@ -42,6 +46,7 @@ class USBIDEApp(App):
         ("ctrl+r", "reload_tree", "Reload tree"),
         ("ctrl+k", "codex_login", "Codex login"),
         ("ctrl+t", "codex_check", "Codex check"),
+        ("ctrl+i", "codex_install", "Codex install"),
         ("ctrl+q", "quit", "Quit"),
     ]
 
@@ -50,6 +55,7 @@ class USBIDEApp(App):
         self.root_dir = root_dir.resolve()
         self.current: Optional[OpenFile] = None
         self._loading_editor: bool = False  # évite de marquer dirty quand on charge un fichier
+        self._codex_install_attempted: bool = False  # évite de répéter l'installation automatique
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -86,7 +92,8 @@ class USBIDEApp(App):
     def on_mount(self) -> None:
         self._log_ui(
             f"[b]USBIDE[/b]\nRoot: {self.root_dir}\n"
-            "Ctrl+S save • F5 run • Ctrl+R reload tree • Ctrl+L clear log • Ctrl+Q quit\n"
+            "Ctrl+S save • F5 run • Ctrl+R reload tree • Ctrl+L clear log • "
+            "Ctrl+I install Codex • Ctrl+Q quit\n"
             "Astuce: utilise le champ `>` pour lancer des commandes shell (dir, git, etc.)."
         )
         self._refresh_title()
@@ -109,6 +116,74 @@ class USBIDEApp(App):
         dirty = " *" if self.current.dirty else ""
         self.title = f"USBIDE{dirty}"
         self.sub_title = f"{self.current.path}  ({self.current.encoding})"
+
+    def _codex_env(self) -> dict[str, str]:
+        """Construit l'environnement (PATH + encodage) pour les commandes Codex."""
+        env = os.environ.copy()
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        return codex_env(self.root_dir, env)
+
+    def _codex_auto_install_enabled(self) -> bool:
+        """Indique si l'installation automatique de Codex est autorisée."""
+        value = os.environ.get("USBIDE_CODEX_AUTO_INSTALL", "1").strip().lower()
+        return value not in {"0", "false", "no", "off"}
+
+    async def _install_codex(self, *, force: bool = False) -> bool:
+        """Installe Codex dans le préfixe portable si nécessaire."""
+        env = self._codex_env()
+        if not force and codex_cli_available(self.root_dir, env):
+            return True
+        if not force and self._codex_install_attempted:
+            return False
+        if not force and not self._codex_auto_install_enabled():
+            self._log_ui(
+                "[yellow]Installation automatique Codex désactivée.[/yellow] "
+                "Définissez USBIDE_CODEX_AUTO_INSTALL=1 pour l'activer."
+            )
+            return False
+
+        self._codex_install_attempted = True
+        package = os.environ.get("USBIDE_CODEX_PIP_PACKAGE", "codex")
+        prefix = codex_install_prefix(self.root_dir)
+        bin_dir = codex_bin_dir(prefix)
+        prefix.mkdir(parents=True, exist_ok=True)
+
+        self._log_ui(
+            "[b]Installation Codex[/b] : "
+            f"package={rich_escape(package)} • prefix={rich_escape(str(prefix))}"
+        )
+
+        try:
+            argv = codex_install_argv(prefix, package)
+        except ValueError as e:
+            self._log_ui(f"[red]Package Codex invalide:[/red] {e}")
+            return False
+
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+
+        try:
+            async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+                if ev["kind"] == "line":
+                    self._log_output(ev["text"])
+                else:
+                    self._log_ui(f"[dim]{ev['text']}[/dim]")
+        except Exception as e:
+            self._log_ui(f"[red]Erreur installation Codex:[/red] {e}")
+            return False
+
+        if codex_cli_available(self.root_dir, env):
+            self._log_ui(
+                "[green]Codex installé.[/green] "
+                f"Binaire attendu dans {rich_escape(str(bin_dir))}."
+            )
+            return True
+
+        self._log_ui(
+            "[yellow]Installation Codex terminée mais binaire non détecté.[/yellow] "
+            "Vérifiez la connexion réseau ou le package configuré."
+        )
+        return False
 
     # -------- DirectoryTree events --------
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
@@ -255,11 +330,13 @@ class USBIDEApp(App):
 
     async def action_codex_login(self) -> None:
         """Lance l'authentification Codex via le CLI."""
-        if not codex_cli_available():
-            self._log_ui(
-                "[red]CLI Codex introuvable.[/red] Installez-le puis relancez la commande."
-            )
-            return
+        if not codex_cli_available(self.root_dir, self._codex_env()):
+            installed = await self._install_codex(force=False)
+            if not installed:
+                self._log_ui(
+                    "[red]CLI Codex introuvable.[/red] Installez-le puis relancez la commande."
+                )
+                return
 
         # Message utilisateur pour préciser le flux d'authentification.
         self._log_ui(
@@ -270,9 +347,7 @@ class USBIDEApp(App):
         argv = codex_login_argv()
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
-        env = os.environ.copy()
-        env.setdefault("PYTHONUTF8", "1")
-        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env = self._codex_env()
 
         try:
             async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
@@ -287,20 +362,20 @@ class USBIDEApp(App):
 
     async def action_codex_check(self) -> None:
         """Vérifie que Codex est utilisable (CLI présent + statut auth)."""
-        if not codex_cli_available():
-            self._log_ui(
-                "[red]CLI Codex introuvable.[/red] Installez-le puis relancez la commande."
-            )
-            return
+        if not codex_cli_available(self.root_dir, self._codex_env()):
+            installed = await self._install_codex(force=False)
+            if not installed:
+                self._log_ui(
+                    "[red]CLI Codex introuvable.[/red] Installez-le puis relancez la commande."
+                )
+                return
 
         self._log_ui("[b]Vérification Codex[/b] : contrôle du statut d'authentification.")
 
         argv = codex_status_argv()
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
-        env = os.environ.copy()
-        env.setdefault("PYTHONUTF8", "1")
-        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env = self._codex_env()
 
         exit_code: Optional[int] = None
         try:
@@ -321,3 +396,7 @@ class USBIDEApp(App):
             self._log_ui(f"[red]CLI Codex introuvable:[/red] {e}")
         except Exception as e:
             self._log_ui(f"[red]Erreur vérification Codex:[/red] {e}")
+
+    async def action_codex_install(self) -> None:
+        """Installe ou met à jour Codex dans l'environnement portable."""
+        await self._install_codex(force=True)
