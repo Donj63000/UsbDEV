@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from usbide.runner import codex_cli_available, codex_login_argv, stream_subprocess
+from usbide.runner import codex_cli_available, codex_login_argv, codex_status_argv, stream_subprocess
 
 
 class TestStreamSubprocess(unittest.IsolatedAsyncioTestCase):
@@ -16,6 +16,10 @@ class TestCodexHelpers(unittest.TestCase):
     def test_codex_login_argv(self) -> None:
         # Vérifie la commande d'authentification attendue.
         self.assertEqual(codex_login_argv(), ["codex", "auth", "login"])
+
+    def test_codex_status_argv(self) -> None:
+        # Vérifie la commande de statut d'authentification attendue.
+        self.assertEqual(codex_status_argv(), ["codex", "auth", "status"])
 
     def test_codex_cli_available(self) -> None:
         # Le helper doit refléter la disponibilité du binaire.

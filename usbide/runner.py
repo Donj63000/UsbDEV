@@ -74,3 +74,8 @@ def codex_cli_available() -> bool:
 def codex_login_argv() -> list[str]:
     """Commande pour initier l'authentification Codex (via navigateur ChatGPT)."""
     return ["codex", "auth", "login"]
+
+
+def codex_status_argv() -> list[str]:
+    """Commande pour vérifier l'état d'authentification Codex."""
+    return ["codex", "auth", "status"]
