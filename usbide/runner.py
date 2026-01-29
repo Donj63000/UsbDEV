@@ -5,7 +5,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import AsyncIterator, Dict, Literal, Optional, Sequence, TypedDict
+from typing import AsyncIterator, Dict, Iterable, Literal, Optional, Sequence, TypedDict
 
 
 class ProcEvent(TypedDict):
@@ -104,16 +104,50 @@ def tools_env(root_dir: Path, base_env: Optional[Dict[str, str]] = None) -> Dict
     return env
 
 
-def pyinstaller_available(root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> bool:
-    """Vérifie la présence du binaire `pyinstaller` dans le PATH."""
+def parse_tool_list(raw: str) -> list[str]:
+    """Nettoie une liste d'outils depuis une chaîne (virgules / espaces)."""
+    items = [item.strip() for item in raw.replace(",", " ").split()]
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for item in items:
+        if not item:
+            continue
+        if item in seen:
+            continue
+        seen.add(item)
+        cleaned.append(item)
+    return cleaned
+
+
+def tool_available(
+    tool: str, root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None
+) -> bool:
+    """Vérifie la présence d'un outil dans le PATH (local ou système)."""
+    if not tool.strip():
+        # Protection: un nom vide n'est pas valide.
+        raise ValueError("tool ne doit pas être vide")
     search_env = env
     if root_dir is not None:
         search_env = tools_env(root_dir, env)
-    return shutil.which("pyinstaller", path=search_env.get("PATH") if search_env else None) is not None
+    return shutil.which(tool, path=search_env.get("PATH") if search_env else None) is not None
+
+
+def pyinstaller_available(root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> bool:
+    """Vérifie la présence du binaire `pyinstaller` dans le PATH."""
+    return tool_available("pyinstaller", root_dir=root_dir, env=env)
 
 
 def pyinstaller_install_argv(prefix: Path) -> list[str]:
     """Commande pour installer PyInstaller via pip dans un préfixe portable."""
+    return pip_install_argv(prefix, ["pyinstaller"])
+
+
+def pip_install_argv(prefix: Path, packages: Iterable[str]) -> list[str]:
+    """Commande pour installer des packages via pip dans un préfixe portable."""
+    cleaned = [pkg.strip() for pkg in packages if pkg.strip()]
+    if not cleaned:
+        # Protection: il faut au moins un package valide.
+        raise ValueError("packages ne doit pas être vide")
     return [
         sys.executable,
         "-m",
@@ -122,7 +156,7 @@ def pyinstaller_install_argv(prefix: Path) -> list[str]:
         "--upgrade",
         "--prefix",
         str(prefix),
-        "pyinstaller",
+        *cleaned,
     ]
 
 

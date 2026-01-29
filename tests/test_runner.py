@@ -11,10 +11,13 @@ from usbide.runner import (
     codex_install_prefix,
     codex_login_argv,
     codex_status_argv,
+    parse_tool_list,
+    pip_install_argv,
     pyinstaller_available,
     pyinstaller_build_argv,
     pyinstaller_install_argv,
     stream_subprocess,
+    tool_available,
     tools_env,
     tools_install_prefix,
 )
@@ -77,6 +80,16 @@ class TestCodexHelpers(unittest.TestCase):
 
 
 class TestToolsHelpers(unittest.TestCase):
+    def test_parse_tool_list(self) -> None:
+        # La liste doit être nettoyée (séparateurs et doublons).
+        tools = parse_tool_list("ruff, black  mypy, pytest ruff")
+        self.assertEqual(tools, ["ruff", "black", "mypy", "pytest"])
+
+    def test_tool_available_rejecte_vide(self) -> None:
+        # Un nom d'outil vide doit déclencher une erreur.
+        with self.assertRaises(ValueError):
+            tool_available(" ")
+
     def test_tools_env_prepend_path(self) -> None:
         # L'environnement outils doit préfixer le PATH avec le binaire portable.
         root_dir = Path("/tmp/usbide")
@@ -92,6 +105,20 @@ class TestToolsHelpers(unittest.TestCase):
         argv = pyinstaller_install_argv(prefix)
         self.assertIn("--prefix", argv)
         self.assertIn(str(prefix), argv)
+
+    def test_pip_install_argv(self) -> None:
+        # La commande pip doit inclure les packages demandés.
+        prefix = Path("/tmp/usbide/.usbide/tools")
+        argv = pip_install_argv(prefix, ["ruff", "black"])
+        self.assertIn("--prefix", argv)
+        self.assertIn(str(prefix), argv)
+        self.assertIn("ruff", argv)
+        self.assertIn("black", argv)
+
+    def test_pip_install_argv_rejecte_vide(self) -> None:
+        # Une liste vide doit déclencher une erreur.
+        with self.assertRaises(ValueError):
+            pip_install_argv(Path("/tmp/usbide/.usbide/tools"), [" "])
 
     def test_pyinstaller_build_argv(self) -> None:
         # La commande PyInstaller doit inclure le script et le dist.
@@ -116,3 +143,13 @@ class TestToolsHelpers(unittest.TestCase):
         with patch("usbide.runner.shutil.which", return_value="/usr/bin/pyinstaller") as which:
             self.assertTrue(pyinstaller_available(root_dir, env))
             which.assert_called_once_with("pyinstaller", path=expected_path)
+
+    def test_tool_available_avec_env(self) -> None:
+        # La disponibilité doit tenir compte du PATH fourni.
+        root_dir = Path("/tmp/usbide")
+        env = {"PATH": "/bin"}
+        expected_bin = str(codex_bin_dir(tools_install_prefix(root_dir)))
+        expected_path = os.pathsep.join([expected_bin, env["PATH"]])
+        with patch("usbide.runner.shutil.which", return_value="/usr/bin/ruff") as which:
+            self.assertTrue(tool_available("ruff", root_dir, env))
+            which.assert_called_once_with("ruff", path=expected_path)
