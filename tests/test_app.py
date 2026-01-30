@@ -185,3 +185,56 @@ class TestUSBIDEAppCodexRun(unittest.IsolatedAsyncioTestCase):
         messages = [call.args[0] for call in dummy_log.write.call_args_list if call.args]
         self.assertTrue(any("Codex introuvable" in msg for msg in messages))
 
+
+class TestUSBIDEAppBugLog(unittest.TestCase):
+    def test_record_issue_cree_bug_md(self) -> None:
+        # Un incident doit etre ajoute dans bug.md avec les champs essentiels.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root_dir = Path(tmp_dir)
+            app = USBIDEApp(root_dir=root_dir)
+
+            app._record_issue("erreur", "Erreur test", contexte="test_unitaire")
+
+            contenu = (root_dir / "bug.md").read_text(encoding="utf-8")
+            self.assertIn("niveau: erreur", contenu)
+            self.assertIn("contexte: test_unitaire", contenu)
+            self.assertIn("message: Erreur test", contenu)
+
+
+class TestUSBIDEAppStreamLog(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_and_log_retour_nonzero(self) -> None:
+        # Un exit code non nul doit etre consigne dans bug.md.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root_dir = Path(tmp_dir)
+            app = USBIDEApp(root_dir=root_dir)
+
+            async def fake_stream(*_args, **_kwargs):
+                yield {"kind": "line", "text": "ok", "returncode": None}
+                yield {"kind": "exit", "text": "exit 2", "returncode": 2}
+
+            fake_log = MagicMock()
+            output_lines: list[str] = []
+            ui_lines: list[str] = []
+
+            def output_log(text: str) -> None:
+                output_lines.append(text)
+
+            def ui_log(text: str) -> None:
+                ui_lines.append(text)
+
+            with (
+                patch("usbide.app.stream_subprocess", fake_stream),
+                patch.object(app, "query_one", return_value=fake_log),
+            ):
+                await app._stream_and_log(
+                    ["cmd"],
+                    cwd=root_dir,
+                    env={},
+                    output_log=output_log,
+                    ui_log=ui_log,
+                    contexte="test subprocess",
+                )
+
+            contenu = (root_dir / "bug.md").read_text(encoding="utf-8")
+            self.assertIn("rc=2", contenu)
+

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import traceback
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, Sequence
 
 from rich.markup import escape as rich_escape
 from textual.app import App, ComposeResult
@@ -66,6 +68,8 @@ class USBIDEApp(App):
         self._loading_editor: bool = False
         self._codex_install_attempted: bool = False
         self._pyinstaller_install_attempted: bool = False
+        # Journal des erreurs/problemes a la racine du workspace.
+        self._bug_log_path: Path = self.root_dir / "bug.md"
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -117,6 +121,16 @@ class USBIDEApp(App):
         )
         self._refresh_title()
 
+    def _handle_exception(self, error: Exception) -> None:
+        # Journalise les exceptions fatales avant de laisser Textual afficher l'erreur.
+        self._record_issue(
+            "erreur",
+            f"Exception non geree: {error}",
+            contexte="exception_fatale",
+            exc=error,
+        )
+        super()._handle_exception(error)
+
     # ---------- logs ----------
     def _log_ui(self, msg: str) -> None:
         self.query_one("#log", RichLog).write(msg)
@@ -129,6 +143,93 @@ class USBIDEApp(App):
 
     def _codex_log_output(self, msg: str) -> None:
         self.query_one("#codex_log", RichLog).write(rich_escape(msg))
+
+    def _record_issue(
+        self,
+        niveau: str,
+        message: str,
+        *,
+        contexte: str,
+        details: Optional[str] = None,
+        exc: Optional[BaseException] = None,
+    ) -> None:
+        """Enregistre un incident dans bug.md (mode append)."""
+        # Le format Markdown facilite la lecture des rapports sur la cle USB.
+        horodatage = datetime.now().isoformat(timespec="seconds")
+        lignes = [
+            f"## {horodatage}",
+            f"- niveau: {niveau}",
+            f"- contexte: {contexte}",
+            f"- message: {message}",
+        ]
+        if details:
+            lignes.append(f"- details: {details}")
+        if exc is not None:
+            lignes.append(f"- exception: {type(exc).__name__}: {exc}")
+            trace = "".join(traceback.format_exception(exc)).rstrip()
+            if trace:
+                lignes.append("```")
+                lignes.extend(trace.splitlines())
+                lignes.append("```")
+        lignes.append("")
+        try:
+            with self._bug_log_path.open("a", encoding="utf-8") as handle:
+                handle.write("\n".join(lignes))
+        except OSError:
+            # Ne pas bloquer l'UI si le fichier bug.md est indisponible.
+            return
+
+    def _log_issue(
+        self,
+        msg: str,
+        *,
+        niveau: str,
+        contexte: str,
+        exc: Optional[BaseException] = None,
+        codex: bool = False,
+    ) -> None:
+        """Affiche un probleme dans l'UI et le consigne dans bug.md."""
+        # On choisit le journal cible (principal ou Codex) avant d'enregistrer l'incident.
+        if codex:
+            self._codex_log_ui(msg)
+        else:
+            self._log_ui(msg)
+        self._record_issue(niveau, msg, contexte=contexte, exc=exc)
+
+    async def _stream_and_log(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        output_log: Callable[[str], None],
+        ui_log: Callable[[str], None],
+        contexte: str,
+        codex: bool = False,
+    ) -> None:
+        """Stream un subprocess et journalise les erreurs."""
+        # Centralise la gestion d'erreurs pour garantir un log bug.md complet.
+        try:
+            async for ev in stream_subprocess(argv, cwd=cwd, env=env):
+                if ev["kind"] == "line":
+                    output_log(ev["text"])
+                    continue
+                if ev["returncode"] not in (None, 0):
+                    self._log_issue(
+                        f"[red]{contexte} terminee en erreur (rc={ev['returncode']}).[/red]",
+                        niveau="erreur",
+                        contexte=contexte,
+                        codex=codex,
+                    )
+                ui_log(f"[dim]{ev['text']}[/dim]")
+        except Exception as exc:
+            self._log_issue(
+                f"[red]Erreur execution {contexte}:[/red] {exc}",
+                niveau="erreur",
+                contexte=contexte,
+                exc=exc,
+                codex=codex,
+            )
 
     # ---------- env portable ----------
     def _ensure_portable_dirs(self) -> None:
@@ -190,10 +291,19 @@ class USBIDEApp(App):
 
         try:
             if is_probably_binary(path):
-                self._log_ui(f"[yellow]Binaire/non texte ignore:[/yellow] {path}")
+                self._log_issue(
+                    f"[yellow]Binaire/non texte ignore:[/yellow] {path}",
+                    niveau="avertissement",
+                    contexte="ouverture_fichier",
+                )
                 return
         except OSError as exc:
-            self._log_ui(f"[red]Acces fichier impossible:[/red] {path} ({exc})")
+            self._log_issue(
+                f"[red]Acces fichier impossible:[/red] {path} ({exc})",
+                niveau="erreur",
+                contexte="ouverture_fichier",
+                exc=exc,
+            )
             return
 
         encoding = detect_text_encoding(path)
@@ -202,7 +312,12 @@ class USBIDEApp(App):
         except UnicodeDecodeError:
             text = path.read_text(encoding=encoding, errors="replace")
         except OSError as exc:
-            self._log_ui(f"[red]Erreur ouverture:[/red] {path} ({exc})")
+            self._log_issue(
+                f"[red]Erreur ouverture:[/red] {path} ({exc})",
+                niveau="erreur",
+                contexte="ouverture_fichier",
+                exc=exc,
+            )
             return
 
         editor = self.query_one(TextArea)
@@ -238,11 +353,14 @@ class USBIDEApp(App):
         argv = windows_cmd_argv(cmd) if os.name == "nt" else ["sh", "-lc", cmd]
         env = self._portable_env(os.environ.copy())
 
-        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-            if ev["kind"] == "line":
-                self._log_output(ev["text"])
-            else:
-                self._log_ui(f"[dim]{ev['text']}[/dim]")
+        await self._stream_and_log(
+            argv,
+            cwd=self.root_dir,
+            env=env,
+            output_log=self._log_output,
+            ui_log=self._log_ui,
+            contexte="commande shell",
+        )
 
     async def _run_codex(self, event: Input.Submitted) -> None:
         prompt = event.value.strip()
@@ -254,7 +372,12 @@ class USBIDEApp(App):
         if not codex_cli_available(self.root_dir, env):
             ok = await self._install_codex(force=False)
             if not ok:
-                self._codex_log_ui("[red]Codex indisponible.[/red] (Ctrl+I pour installer)")
+                self._log_issue(
+                    "[red]Codex indisponible.[/red] (Ctrl+I pour installer)",
+                    niveau="erreur",
+                    contexte="codex_exec",
+                    codex=True,
+                )
                 return
 
         argv = codex_exec_argv(prompt, root_dir=self.root_dir, env=env, json_output=True)
@@ -264,6 +387,13 @@ class USBIDEApp(App):
         try:
             async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
                 if ev["kind"] != "line":
+                    if ev["returncode"] not in (None, 0):
+                        self._log_issue(
+                            f"[red]Codex termine en erreur (rc={ev['returncode']}).[/red]",
+                            niveau="erreur",
+                            contexte="codex_exec",
+                            codex=True,
+                        )
                     self._codex_log_ui(f"[dim]{ev['text']}[/dim]")
                     continue
 
@@ -283,10 +413,22 @@ class USBIDEApp(App):
                     self._codex_log_output(line)
         except FileNotFoundError as exc:
             # Cas typique: codex ou node introuvable dans le PATH.
-            self._codex_log_ui(f"[red]Codex introuvable.[/red] {exc}")
+            self._log_issue(
+                f"[red]Codex introuvable.[/red] {exc}",
+                niveau="erreur",
+                contexte="codex_exec",
+                exc=exc,
+                codex=True,
+            )
         except Exception as exc:
             # Capture generique pour ne pas fermer l'application.
-            self._codex_log_ui(f"[red]Erreur execution Codex:[/red] {exc}")
+            self._log_issue(
+                f"[red]Erreur execution Codex:[/red] {exc}",
+                niveau="erreur",
+                contexte="codex_exec",
+                exc=exc,
+                codex=True,
+            )
 
     # ---------- actions ----------
     def action_clear_log(self) -> None:
@@ -300,7 +442,11 @@ class USBIDEApp(App):
 
     def action_save(self) -> bool:
         if not self.current:
-            self._log_ui("[yellow]Aucun fichier ouvert.[/yellow]")
+            self._log_issue(
+                "[yellow]Aucun fichier ouvert.[/yellow]",
+                niveau="avertissement",
+                contexte="sauvegarde",
+            )
             return False
 
         editor = self.query_one(TextArea)
@@ -317,21 +463,39 @@ class USBIDEApp(App):
             try:
                 path.write_text(content, encoding="utf-8")
             except OSError as exc:
-                self._log_ui(f"[red]Erreur sauvegarde (UTF-8):[/red] {path} ({exc})")
+                self._log_issue(
+                    f"[red]Erreur sauvegarde (UTF-8):[/red] {path} ({exc})",
+                    niveau="erreur",
+                    contexte="sauvegarde",
+                    exc=exc,
+                )
                 return False
             self.current.encoding = "utf-8"
             self.current.dirty = False
-            self._log_ui(f"[yellow]Sauvegarde en UTF-8 (fallback)[/yellow] {path}")
+            self._log_issue(
+                f"[yellow]Sauvegarde en UTF-8 (fallback)[/yellow] {path}",
+                niveau="avertissement",
+                contexte="sauvegarde",
+            )
             return True
         except OSError as exc:
-            self._log_ui(f"[red]Erreur sauvegarde:[/red] {path} ({exc})")
+            self._log_issue(
+                f"[red]Erreur sauvegarde:[/red] {path} ({exc})",
+                niveau="erreur",
+                contexte="sauvegarde",
+                exc=exc,
+            )
             return False
         finally:
             self._refresh_title()
 
     async def action_run(self) -> None:
         if not self.current or self.current.path.suffix.lower() != ".py":
-            self._log_ui("[yellow]Ouvre un fichier .py.[/yellow]")
+            self._log_issue(
+                "[yellow]Ouvre un fichier .py.[/yellow]",
+                niveau="avertissement",
+                contexte="execution_python",
+            )
             return
         if self.current.dirty:
             self.action_save()
@@ -340,11 +504,14 @@ class USBIDEApp(App):
         env = self._portable_env(os.environ.copy())
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
-        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-            if ev["kind"] == "line":
-                self._log_output(ev["text"])
-            else:
-                self._log_ui(f"[dim]{ev['text']}[/dim]")
+        await self._stream_and_log(
+            argv,
+            cwd=self.root_dir,
+            env=env,
+            output_log=self._log_output,
+            ui_log=self._log_ui,
+            contexte="execution python",
+        )
 
     def _codex_device_auth_enabled(self) -> bool:
         return os.environ.get("USBIDE_CODEX_DEVICE_AUTH", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -359,7 +526,11 @@ class USBIDEApp(App):
         if not force and self._codex_install_attempted:
             return False
         if not force and not self._codex_auto_install_enabled():
-            self._log_ui("[yellow]Auto-install Codex desactive.[/yellow]")
+            self._log_issue(
+                "[yellow]Auto-install Codex desactive.[/yellow]",
+                niveau="avertissement",
+                contexte="installation_codex",
+            )
             return False
 
         self._codex_install_attempted = True
@@ -373,15 +544,23 @@ class USBIDEApp(App):
         try:
             argv = codex_install_argv(self.root_dir, prefix, package)
         except Exception as e:
-            self._log_ui(f"[red]Impossible d'installer Codex:[/red] {e}")
+            self._log_issue(
+                f"[red]Impossible d'installer Codex:[/red] {e}",
+                niveau="erreur",
+                contexte="installation_codex",
+                exc=e,
+            )
             return False
 
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
-        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-            if ev["kind"] == "line":
-                self._log_output(ev["text"])
-            else:
-                self._log_ui(f"[dim]{ev['text']}[/dim]")
+        await self._stream_and_log(
+            argv,
+            cwd=self.root_dir,
+            env=env,
+            output_log=self._log_output,
+            ui_log=self._log_ui,
+            contexte="installation Codex",
+        )
 
         ok = codex_cli_available(self.root_dir, env)
         if ok:
@@ -396,38 +575,56 @@ class USBIDEApp(App):
         if not codex_cli_available(self.root_dir, env):
             ok = await self._install_codex(force=False)
             if not ok:
-                self._log_ui("[red]Codex introuvable.[/red]")
+                self._log_issue(
+                    "[red]Codex introuvable.[/red]",
+                    niveau="erreur",
+                    contexte="codex_login",
+                )
                 return
 
         self._log_ui("[b]Login Codex[/b] : navigateur/Device auth selon config.")
         argv = codex_login_argv(self.root_dir, env, device_auth=self._codex_device_auth_enabled())
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
-        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-            if ev["kind"] == "line":
-                self._log_output(ev["text"])
-            else:
-                self._log_ui(f"[dim]{ev['text']}[/dim]")
+        await self._stream_and_log(
+            argv,
+            cwd=self.root_dir,
+            env=env,
+            output_log=self._log_output,
+            ui_log=self._log_ui,
+            contexte="login Codex",
+        )
 
     async def action_codex_check(self) -> None:
         env = self._codex_env()
         if not codex_cli_available(self.root_dir, env):
-            self._log_ui("[yellow]Codex non installe.[/yellow]")
+            self._log_issue(
+                "[yellow]Codex non installe.[/yellow]",
+                niveau="avertissement",
+                contexte="codex_status",
+            )
             return
         argv = codex_status_argv(self.root_dir, env)
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
-        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-            if ev["kind"] == "line":
-                self._log_output(ev["text"])
-            else:
-                self._log_ui(f"[dim]{ev['text']}[/dim]")
+        await self._stream_and_log(
+            argv,
+            cwd=self.root_dir,
+            env=env,
+            output_log=self._log_output,
+            ui_log=self._log_ui,
+            contexte="verification Codex",
+        )
 
     async def action_dev_tools(self) -> None:
         raw = os.environ.get("USBIDE_DEV_TOOLS", "ruff black mypy pytest")
         tools = parse_tool_list(raw)
         if not tools:
-            self._log_ui("[yellow]Liste outils vide.[/yellow]")
+            self._log_issue(
+                "[yellow]Liste outils vide.[/yellow]",
+                niveau="avertissement",
+                contexte="outils_dev",
+            )
             return
 
         env = self._tools_env()
@@ -438,11 +635,14 @@ class USBIDEApp(App):
         argv = pip_install_argv(prefix, tools, find_links=wheelhouse, no_index=wheelhouse is not None)
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
-        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-            if ev["kind"] == "line":
-                self._log_output(ev["text"])
-            else:
-                self._log_ui(f"[dim]{ev['text']}[/dim]")
+        await self._stream_and_log(
+            argv,
+            cwd=self.root_dir,
+            env=env,
+            output_log=self._log_output,
+            ui_log=self._log_ui,
+            contexte="installation outils dev",
+        )
 
     async def _install_pyinstaller(self, *, force: bool = False) -> bool:
         env = self._tools_env()
@@ -461,17 +661,24 @@ class USBIDEApp(App):
         self._log_ui(f"[b]Installation PyInstaller[/b] bin={rich_escape(str(bin_dir))}")
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
-        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-            if ev["kind"] == "line":
-                self._log_output(ev["text"])
-            else:
-                self._log_ui(f"[dim]{ev['text']}[/dim]")
+        await self._stream_and_log(
+            argv,
+            cwd=self.root_dir,
+            env=env,
+            output_log=self._log_output,
+            ui_log=self._log_ui,
+            contexte="installation PyInstaller",
+        )
 
         return pyinstaller_available(self.root_dir, env)
 
     async def action_build_exe(self) -> None:
         if not self.current or self.current.path.suffix.lower() != ".py":
-            self._log_ui("[yellow]Ouvre un fichier .py.[/yellow]")
+            self._log_issue(
+                "[yellow]Ouvre un fichier .py.[/yellow]",
+                niveau="avertissement",
+                contexte="build_exe",
+            )
             return
         if self.current.dirty:
             self.action_save()
@@ -480,7 +687,11 @@ class USBIDEApp(App):
         if not pyinstaller_available(self.root_dir, env):
             ok = await self._install_pyinstaller(force=False)
             if not ok:
-                self._log_ui("[red]PyInstaller indisponible.[/red]")
+                self._log_issue(
+                    "[red]PyInstaller indisponible.[/red]",
+                    niveau="erreur",
+                    contexte="build_exe",
+                )
                 return
 
         dist_dir = self.root_dir / "dist"
@@ -488,9 +699,12 @@ class USBIDEApp(App):
         argv = pyinstaller_build_argv(self.current.path, dist_dir, onefile=False, work_dir=self.root_dir / "tmp")
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
-        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-            if ev["kind"] == "line":
-                self._log_output(ev["text"])
-            else:
-                self._log_ui(f"[dim]{ev['text']}[/dim]")
+        await self._stream_and_log(
+            argv,
+            cwd=self.root_dir,
+            env=env,
+            output_log=self._log_output,
+            ui_log=self._log_ui,
+            contexte="construction exe",
+        )
 
