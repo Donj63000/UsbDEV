@@ -15,6 +15,14 @@ class ProcEvent(TypedDict):
     returncode: Optional[int]
 
 
+def _is_windows() -> bool:
+    """Retourne True si l'OS courant est Windows.
+
+    Note: on factorise ce test pour pouvoir le mocker facilement en tests unitaires.
+    """
+    return os.name == "nt"
+
+
 async def stream_subprocess(
     argv: Sequence[str],
     *,
@@ -223,7 +231,7 @@ def node_executable(root_dir: Path, env: Optional[Dict[str, str]] = None) -> Opt
     candidates: list[Path] = []
     node_dir = node_tools_dir(root_dir)
 
-    if os.name == "nt":
+    if _is_windows():
         candidates.append(node_dir / "node.exe")
     else:
         candidates.extend([node_dir / "bin" / "node", node_dir / "node"])
@@ -336,12 +344,47 @@ def codex_cli_available(root_dir: Optional[Path] = None, env: Optional[Dict[str,
 
 
 def _codex_base_argv(root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> list[str]:
-    """Prefere node + entrypoint JS, sinon fallback 'codex'."""
+    """Retourne la commande de base pour lancer Codex.
+
+    Priorite :
+    1) Mode portable : node.exe + entrypoint JS de @openai/codex (fiable, pas de .cmd/.bat).
+    2) Fallback systeme : binaire `codex` dans le PATH.
+
+    Sur Windows, `npm install -g @openai/codex` cree souvent un shim `codex.cmd`.
+    Or, `asyncio.create_subprocess_exec(..., shell=False)` ne sait pas lancer un `.cmd` directement,
+    ce qui se traduit typiquement par : [WinError 2] Le fichier specifie est introuvable.
+
+    Donc en fallback Windows, si `codex` resolu est un `.cmd`/`.bat`, on l'execute via cmd.exe.
+    """
+    # --- (1) Mode portable : node + entrypoint ---
     if root_dir is not None:
         node = node_executable(root_dir, env=env)
         entry = codex_entrypoint_js(codex_install_prefix(root_dir))
         if node is not None and entry is not None:
             return [str(node), str(entry)]
+
+    # --- (2) Fallback systeme ---
+    if _is_windows():
+        # `which` doit utiliser le PATH de l'env fourni (celui de l'app).
+        search_path = (env or os.environ).get("PATH")
+        resolved = shutil.which("codex", path=search_path)
+        if resolved:
+            suffix = Path(resolved).suffix.lower()
+
+            # Cas npm Windows : codex.cmd / codex.bat (doit passer par cmd.exe)
+            if suffix in {".cmd", ".bat"}:
+                comspec = (env or os.environ).get("COMSPEC") or os.environ.get("COMSPEC") or "cmd.exe"
+                return [comspec, "/d", "/s", "/c", resolved]
+
+            # Certains environnements ajoutent aussi un shim PowerShell.
+            if suffix == ".ps1":
+                powershell = shutil.which("powershell", path=search_path) or "powershell"
+                return [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved]
+
+            # Si c'est un vrai .exe (ou autre), on peut le lancer directement.
+            return [resolved]
+
+    # Par defaut (Linux/macOS, ou PATH qui resolvra un binaire executable)
     return ["codex"]
 
 

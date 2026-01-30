@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,11 +19,13 @@ from usbide.runner import (
     codex_bin_dir,
     codex_cli_available,
     codex_env,
+    codex_entrypoint_js,
     codex_exec_argv,
     codex_install_argv,
     codex_install_prefix,
     codex_login_argv,
     codex_status_argv,
+    node_executable,
     parse_tool_list,
     pip_install_argv,
     pyinstaller_available,
@@ -604,6 +607,19 @@ class USBIDEApp(App):
                 contexte="codex_status",
             )
             return
+        # Diagnostic lisible pour comprendre rapidement la resolution Codex.
+        node_path = node_executable(self.root_dir, env=env)
+        entry_path = codex_entrypoint_js(codex_install_prefix(self.root_dir))
+        resolved = shutil.which("codex", path=env.get("PATH"))
+        self._log_ui(f"[dim]node: {node_path or 'absent'}[/dim]")
+        self._log_ui(f"[dim]entrypoint: {entry_path or 'absent'}[/dim]")
+        self._log_ui(f"[dim]codex (PATH): {resolved or 'absent'}[/dim]")
+        if os.name == "nt" and resolved:
+            suffix = Path(resolved).suffix.lower()
+            if suffix in {".cmd", ".bat"}:
+                self._log_ui("[dim]shim .cmd detecte: lancement via cmd.exe[/dim]")
+            elif suffix == ".ps1":
+                self._log_ui("[dim]shim .ps1 detecte: lancement via PowerShell[/dim]")
         argv = codex_status_argv(self.root_dir, env)
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 

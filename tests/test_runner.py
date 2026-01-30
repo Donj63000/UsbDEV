@@ -73,24 +73,57 @@ class TestStreamSubprocess(unittest.IsolatedAsyncioTestCase):
 class TestCodexHelpers(unittest.TestCase):
     def test_codex_login_argv_default(self) -> None:
         # Verifie la commande d'authentification par defaut.
-        argv = codex_login_argv()
-        self.assertEqual(argv[0], "codex")
-        self.assertEqual(argv[1:], ["login"])
+        # Force un environnement non-Windows pour un resultat deterministe.
+        with patch("usbide.runner._is_windows", return_value=False):
+            argv = codex_login_argv()
+            self.assertEqual(argv[0], "codex")
+            self.assertEqual(argv[1:], ["login"])
 
     def test_codex_status_argv_default(self) -> None:
         # Verifie la commande de statut par defaut.
-        argv = codex_status_argv()
-        self.assertEqual(argv[0], "codex")
-        self.assertEqual(argv[1:], ["login", "status"])
+        # Force un environnement non-Windows pour un resultat deterministe.
+        with patch("usbide.runner._is_windows", return_value=False):
+            argv = codex_status_argv()
+            self.assertEqual(argv[0], "codex")
+            self.assertEqual(argv[1:], ["login", "status"])
 
     def test_codex_exec_argv_json(self) -> None:
         # Verifie le mode JSONL et les arguments additionnels.
-        argv = codex_exec_argv("hello", json_output=True, extra_args=["--model", "gpt-5"])
-        self.assertEqual(argv[0], "codex")
-        self.assertIn("--json", argv)
-        self.assertIn("--model", argv)
-        self.assertIn("gpt-5", argv)
-        self.assertEqual(argv[-1], "hello")
+        # Force un environnement non-Windows pour un resultat deterministe.
+        with patch("usbide.runner._is_windows", return_value=False):
+            argv = codex_exec_argv("hello", json_output=True, extra_args=["--model", "gpt-5"])
+            self.assertEqual(argv[0], "codex")
+            self.assertIn("--json", argv)
+            self.assertIn("--model", argv)
+            self.assertIn("gpt-5", argv)
+            self.assertEqual(argv[-1], "hello")
+
+    def test_codex_exec_argv_windows_cmd_shim(self) -> None:
+        """Sur Windows, `codex` est souvent un `codex.cmd` (npm shim).
+
+        Dans ce cas, on doit passer par `cmd.exe /c` sinon CreateProcess peut lever WinError 2.
+        Ce test simule ce scenario en mockant la detection Windows + shutil.which().
+        """
+
+        def fake_which(cmd: str, path: str | None = None) -> str | None:
+            if cmd == "codex":
+                return r"C:\Users\me\AppData\Roaming\npm\codex.cmd"
+            return None
+
+        with patch("usbide.runner._is_windows", return_value=True):
+            with patch("usbide.runner.shutil.which", side_effect=fake_which):
+                env = {"PATH": r"C:\Users\me\AppData\Roaming\npm", "COMSPEC": r"C:\Windows\System32\cmd.exe"}
+                argv = codex_exec_argv("hello", root_dir=Path("C:/tmp/usbide"), env=env, json_output=True)
+
+                # cmd.exe wrapper
+                self.assertEqual(argv[0], env["COMSPEC"])
+                self.assertIn("/c", argv)
+                self.assertIn(r"C:\Users\me\AppData\Roaming\npm\codex.cmd", argv)
+
+                # suite normale des args codex
+                self.assertIn("exec", argv)
+                self.assertIn("--json", argv)
+                self.assertEqual(argv[-1], "hello")
 
     def test_codex_exec_argv_rejecte_vide(self) -> None:
         # Un prompt vide doit declencher une erreur.
