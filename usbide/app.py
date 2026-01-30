@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,18 +16,19 @@ from usbide.runner import (
     codex_bin_dir,
     codex_cli_available,
     codex_env,
+    codex_exec_argv,
     codex_install_argv,
     codex_install_prefix,
     codex_login_argv,
     codex_status_argv,
     parse_tool_list,
+    pip_install_argv,
     pyinstaller_available,
     pyinstaller_build_argv,
     pyinstaller_install_argv,
-    pip_install_argv,
     python_run_argv,
+    python_scripts_dir,
     stream_subprocess,
-    tool_available,
     tools_env,
     tools_install_prefix,
     windows_cmd_argv,
@@ -41,20 +43,16 @@ class OpenFile:
 
 
 class USBIDEApp(App):
-    """Mini IDE terminal portable (Textual).
-
-    Objectif: fonctionner *portable* sur une clé USB.
-    """
-
     CSS_PATH = "usbide.tcss"
-    # Libellés en français pour une interface 100 % francophone.
+
+    # Ordre volontaire pour regrouper les actions d'execution avant les outils dev.
     BINDINGS = [
         ("ctrl+s", "save", "Sauvegarder"),
-        ("f5", "run", "Exécuter"),
-        ("ctrl+l", "clear_log", "Effacer le journal"),
+        ("f5", "run", "Executer"),
+        ("ctrl+l", "clear_log", "Effacer les journaux"),
         ("ctrl+r", "reload_tree", "Recharger l'arborescence"),
         ("ctrl+k", "codex_login", "Connexion Codex"),
-        ("ctrl+t", "codex_check", "Vérifier Codex"),
+        ("ctrl+t", "codex_check", "Verifier Codex"),
         ("ctrl+i", "codex_install", "Installer Codex"),
         ("ctrl+e", "build_exe", "Construire l'EXE"),
         ("ctrl+d", "dev_tools", "Outils de dev"),
@@ -65,125 +63,98 @@ class USBIDEApp(App):
         super().__init__()
         self.root_dir = root_dir.resolve()
         self.current: Optional[OpenFile] = None
-        self._loading_editor: bool = False  # évite de marquer dirty quand on charge un fichier
-        self._codex_install_attempted: bool = False  # évite de répéter l'installation automatique
-        self._pyinstaller_install_attempted: bool = False  # évite de répéter l'installation automatique
+        self._loading_editor: bool = False
+        self._codex_install_attempted: bool = False
+        self._pyinstaller_install_attempted: bool = False
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="main"):
             tree = DirectoryTree(str(self.root_dir), id="tree")
-            # Titre de bordure défini via l'API Textual (pas disponible en CSS).
             tree.border_title = "Fichiers"
             yield tree
+
             with Vertical(id="right"):
                 editor = self._make_editor()
-                # Titre de bordure défini via l'API Textual (pas disponible en CSS).
-                editor.border_title = "Éditeur"
+                editor.border_title = "Editeur"
                 yield editor
-                cmd = Input(placeholder="> commande shell (Entrée pour exécuter)", id="cmd")
-                # Titre de bordure défini via l'API Textual (pas disponible en CSS).
-                cmd.border_title = "Commande"
-                yield cmd
-                # markup=True pour nos messages; on escape la sortie externe
-                log = RichLog(id="log", markup=True)
-                # Titre de bordure défini via l'API Textual (pas disponible en CSS).
-                log.border_title = "Journal"
-                yield log
+
+                # Double journal: shell (gauche) / Codex (droite).
+                with Horizontal(id="bottom"):
+                    with Vertical(id="shell"):
+                        cmd = Input(placeholder="> commande shell (Entree)", id="cmd")
+                        cmd.border_title = "Commande"
+                        yield cmd
+
+                        log = RichLog(id="log", markup=True)
+                        log.border_title = "Journal"
+                        yield log
+
+                    with Vertical(id="codex"):
+                        codex_cmd = Input(
+                            placeholder="> Codex (Entree) : lance `codex exec --json <prompt>`",
+                            id="codex_cmd",
+                        )
+                        codex_cmd.border_title = "Codex"
+                        yield codex_cmd
+
+                        codex_log = RichLog(id="codex_log", markup=True)
+                        codex_log.border_title = "Sortie Codex"
+                        yield codex_log
+
         yield Footer()
 
     def _make_editor(self) -> TextArea:
-        """Crée l'éditeur avec fallback si `TextArea.code_editor` n'existe pas."""
         if hasattr(TextArea, "code_editor"):
-            # Textual récent
             return TextArea.code_editor("", language=None, id="editor")  # type: ignore[attr-defined]
-
-        # Fallback: TextArea standard
-        editor = TextArea("", id="editor")
-        # Quelques options si disponibles
-        for attr, value in (
-            ("show_line_numbers", True),
-            ("tab_behavior", "indent"),
-            ("soft_wrap", False),
-        ):
-            if hasattr(editor, attr):
-                try:
-                    setattr(editor, attr, value)
-                except Exception:
-                    pass
-        return editor
+        return TextArea("", id="editor")
 
     def on_mount(self) -> None:
-        # Prépare les dossiers portables avant toute opération.
         self._ensure_portable_dirs()
         self._log_ui(
-            # Affichage de bienvenue aligné sur le nom produit.
             f"[b]ValDev Pro v1[/b]\nRoot: {self.root_dir}\n"
-            "Ctrl+S sauvegarder • F5 exécuter • Ctrl+R recharger l'arborescence • "
-            "Ctrl+L effacer le journal • Ctrl+I installer Codex • Ctrl+D outils de dev • "
-            "Ctrl+E construire l'EXE • Ctrl+Q quitter\n"
-            "Astuce: utilise le champ `>` pour lancer des commandes shell (dir, git, etc.)."
+            "Shell: champ 'Commande' - Codex: champ 'Codex' - Ctrl+K login - Ctrl+I install\n"
         )
         self._refresh_title()
 
-    # -------- logging helpers --------
+    # ---------- logs ----------
     def _log_ui(self, msg: str) -> None:
-        """Log interne: on autorise le markup Rich."""
-        self.query_one(RichLog).write(msg)
+        self.query_one("#log", RichLog).write(msg)
 
     def _log_output(self, msg: str) -> None:
-        """Log externe (sortie programme / shell): on escape pour éviter le markup accidentel."""
-        self.query_one(RichLog).write(rich_escape(msg))
+        self.query_one("#log", RichLog).write(rich_escape(msg))
 
-    # -------- UI helpers --------
-    def _refresh_title(self) -> None:
-        if not self.current:
-            # Nom officiel affiché en haut du TUI.
-            self.title = "ValDev Pro v1"
-            self.sub_title = str(self.root_dir)
-            return
-        dirty = " *" if self.current.dirty else ""
-        # Indique un fichier modifié tout en gardant le branding.
-        self.title = f"ValDev Pro v1{dirty}"
-        self.sub_title = f"{self.current.path}  ({self.current.encoding})"
+    def _codex_log_ui(self, msg: str) -> None:
+        self.query_one("#codex_log", RichLog).write(msg)
 
+    def _codex_log_output(self, msg: str) -> None:
+        self.query_one("#codex_log", RichLog).write(rich_escape(msg))
+
+    # ---------- env portable ----------
     def _ensure_portable_dirs(self) -> None:
-        """Crée les dossiers portables nécessaires (cache/tmp/config)."""
-        targets = (
+        for path in (
             self.root_dir / "cache" / "pip",
             self.root_dir / "cache" / "pycache",
+            self.root_dir / "cache" / "npm",
             self.root_dir / "tmp",
             self.root_dir / "codex_home",
-        )
-        for path in targets:
-            try:
-                path.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                # Avertit sans bloquer l'UI si un dossier ne peut pas être créé.
-                self._log_ui(
-                    f"[yellow]Impossible de créer[/yellow] {path} ({exc})"
-                )
+        ):
+            path.mkdir(parents=True, exist_ok=True)
 
     def _portable_env(self, env: dict[str, str]) -> dict[str, str]:
-        """Force les variables d'environnement pour écrire sur la clé."""
-        # On force les chemins pour garantir le mode "zéro trace".
         env["PIP_CACHE_DIR"] = str(self.root_dir / "cache" / "pip")
         env["PYTHONPYCACHEPREFIX"] = str(self.root_dir / "cache" / "pycache")
         env["TEMP"] = str(self.root_dir / "tmp")
         env["TMP"] = str(self.root_dir / "tmp")
         env["PYTHONNOUSERSITE"] = "1"
+
         env["CODEX_HOME"] = str(self.root_dir / "codex_home")
+
+        env["NPM_CONFIG_CACHE"] = str(self.root_dir / "cache" / "npm")
+        env["NPM_CONFIG_UPDATE_NOTIFIER"] = "false"
         return env
 
-    def _wheelhouse_path(self) -> Optional[Path]:
-        """Retourne le chemin du wheelhouse offline s'il existe."""
-        wheelhouse = self.root_dir / "tools" / "wheels"
-        if wheelhouse.is_dir():
-            return wheelhouse
-        return None
-
     def _codex_env(self) -> dict[str, str]:
-        """Construit l'environnement (PATH + encodage) pour les commandes Codex."""
         env = os.environ.copy()
         env.setdefault("PYTHONUTF8", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -191,224 +162,38 @@ class USBIDEApp(App):
         return codex_env(self.root_dir, env)
 
     def _tools_env(self) -> dict[str, str]:
-        """Construit l'environnement (PATH + encodage) pour les outils portables."""
         env = os.environ.copy()
         env.setdefault("PYTHONUTF8", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
         env = self._portable_env(env)
         return tools_env(self.root_dir, env)
 
-    def _codex_auto_install_enabled(self) -> bool:
-        """Indique si l'installation automatique de Codex est autorisée."""
-        value = os.environ.get("USBIDE_CODEX_AUTO_INSTALL", "1").strip().lower()
-        return value not in {"0", "false", "no", "off"}
+    def _wheelhouse_path(self) -> Optional[Path]:
+        wheelhouse = self.root_dir / "tools" / "wheels"
+        return wheelhouse if wheelhouse.is_dir() else None
 
-    def _dev_tools_list(self) -> list[str]:
-        """Retourne la liste des outils dev à embarquer localement."""
-        raw = os.environ.get("USBIDE_DEV_TOOLS", "ruff black mypy pytest")
-        tools = parse_tool_list(raw)
-        if not tools:
-            # On avertit si la liste est vide pour éviter une installation silencieuse.
-            self._log_ui(
-                "[yellow]Liste d'outils dev vide.[/yellow] "
-                "Définissez USBIDE_DEV_TOOLS pour configurer les outils."
-            )
-        return tools
+    # ---------- UI title ----------
+    def _refresh_title(self) -> None:
+        if not self.current:
+            self.title = "ValDev Pro v1"
+            self.sub_title = str(self.root_dir)
+            return
+        dirty = " *" if self.current.dirty else ""
+        self.title = f"ValDev Pro v1{dirty}"
+        self.sub_title = f"{self.current.path}  ({self.current.encoding})"
 
-    async def _install_dev_tools(self, *, force: bool = False) -> bool:
-        """Installe les outils dev dans le préfixe portable si besoin."""
-        tools = self._dev_tools_list()
-        if not tools:
-            return False
-
-        env = self._tools_env()
-        missing = [tool for tool in tools if not tool_available(tool, self.root_dir, env)]
-        if not missing and not force:
-            self._log_ui("[green]Outils dev déjà disponibles.[/green]")
-            return True
-
-        prefix = tools_install_prefix(self.root_dir)
-        prefix.mkdir(parents=True, exist_ok=True)
-        packages = tools if force else missing
-
-        self._log_ui(
-            "[b]Installation outils dev[/b] : "
-            f"packages={rich_escape(' '.join(packages))} • "
-            f"prefix={rich_escape(str(prefix))}"
-        )
-
-        try:
-            wheelhouse = self._wheelhouse_path()
-            if wheelhouse is not None:
-                self._log_ui(
-                    f"[dim]Wheelhouse offline détecté : {rich_escape(str(wheelhouse))}[/dim]"
-                )
-            argv = pip_install_argv(
-                prefix,
-                packages,
-                find_links=wheelhouse,
-                no_index=wheelhouse is not None,
-            )
-        except ValueError as e:
-            self._log_ui(f"[red]Liste d'outils invalide:[/red] {e}")
-            return False
-
-        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
-
-        try:
-            async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-                if ev["kind"] == "line":
-                    self._log_output(ev["text"])
-                else:
-                    self._log_ui(f"[dim]{ev['text']}[/dim]")
-        except Exception as e:
-            self._log_ui(f"[red]Erreur installation outils dev:[/red] {e}")
-            return False
-
-        still_missing = [tool for tool in tools if not tool_available(tool, self.root_dir, env)]
-        if still_missing:
-            self._log_ui(
-                "[yellow]Outils manquants après installation:[/yellow] "
-                f"{rich_escape(' '.join(still_missing))}"
-            )
-            return False
-
-        self._log_ui("[green]Outils dev installés.[/green]")
-        return True
-
-    async def _install_codex(self, *, force: bool = False) -> bool:
-        """Installe Codex dans le préfixe portable si nécessaire."""
-        env = self._codex_env()
-        if not force and codex_cli_available(self.root_dir, env):
-            return True
-        if not force and self._codex_install_attempted:
-            return False
-        if not force and not self._codex_auto_install_enabled():
-            self._log_ui(
-                "[yellow]Installation automatique Codex désactivée.[/yellow] "
-                "Définissez USBIDE_CODEX_AUTO_INSTALL=1 pour l'activer."
-            )
-            return False
-
-        self._codex_install_attempted = True
-        package = os.environ.get("USBIDE_CODEX_PIP_PACKAGE", "codex")
-        prefix = codex_install_prefix(self.root_dir)
-        bin_dir = codex_bin_dir(prefix)
-        prefix.mkdir(parents=True, exist_ok=True)
-
-        self._log_ui(
-            "[b]Installation Codex[/b] : "
-            f"package={rich_escape(package)} • prefix={rich_escape(str(prefix))}"
-        )
-
-        try:
-            wheelhouse = self._wheelhouse_path()
-            if wheelhouse is not None:
-                self._log_ui(
-                    f"[dim]Wheelhouse offline détecté : {rich_escape(str(wheelhouse))}[/dim]"
-                )
-            argv = codex_install_argv(
-                prefix,
-                package,
-                find_links=wheelhouse,
-                no_index=wheelhouse is not None,
-            )
-        except ValueError as e:
-            self._log_ui(f"[red]Package Codex invalide:[/red] {e}")
-            return False
-
-        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
-
-        try:
-            async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-                if ev["kind"] == "line":
-                    self._log_output(ev["text"])
-                else:
-                    self._log_ui(f"[dim]{ev['text']}[/dim]")
-        except Exception as e:
-            self._log_ui(f"[red]Erreur installation Codex:[/red] {e}")
-            return False
-
-        if codex_cli_available(self.root_dir, env):
-            self._log_ui(
-                "[green]Codex installé.[/green] "
-                f"Binaire attendu dans {rich_escape(str(bin_dir))}."
-            )
-            return True
-
-        self._log_ui(
-            "[yellow]Installation Codex terminée mais binaire non détecté.[/yellow] "
-            "Vérifiez la connexion réseau ou le package configuré."
-        )
-        return False
-
-    async def _install_pyinstaller(self, *, force: bool = False) -> bool:
-        """Installe PyInstaller dans le préfixe portable si nécessaire."""
-        env = self._tools_env()
-        if not force and pyinstaller_available(self.root_dir, env):
-            return True
-        if not force and self._pyinstaller_install_attempted:
-            return False
-
-        self._pyinstaller_install_attempted = True
-        prefix = tools_install_prefix(self.root_dir)
-        bin_dir = codex_bin_dir(prefix)
-        prefix.mkdir(parents=True, exist_ok=True)
-
-        self._log_ui(
-            "[b]Installation PyInstaller[/b] : "
-            f"prefix={rich_escape(str(prefix))}"
-        )
-
-        wheelhouse = self._wheelhouse_path()
-        if wheelhouse is not None:
-            self._log_ui(
-                f"[dim]Wheelhouse offline détecté : {rich_escape(str(wheelhouse))}[/dim]"
-            )
-        argv = pyinstaller_install_argv(
-            prefix,
-            find_links=wheelhouse,
-            no_index=wheelhouse is not None,
-        )
-        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
-
-        try:
-            async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-                if ev["kind"] == "line":
-                    self._log_output(ev["text"])
-                else:
-                    self._log_ui(f"[dim]{ev['text']}[/dim]")
-        except Exception as e:
-            self._log_ui(f"[red]Erreur installation PyInstaller:[/red] {e}")
-            return False
-
-        if pyinstaller_available(self.root_dir, env):
-            self._log_ui(
-                "[green]PyInstaller installé.[/green] "
-                f"Binaire attendu dans {rich_escape(str(bin_dir))}."
-            )
-            return True
-
-        self._log_ui(
-            "[yellow]Installation PyInstaller terminée mais binaire non détecté.[/yellow] "
-            "Vérifiez la connexion réseau ou le cache pip."
-        )
-        return False
-
-    # -------- DirectoryTree events --------
+    # ---------- tree ----------
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         path: Path = event.path
-
         if path.is_dir():
             return
 
         try:
             if is_probably_binary(path):
-                self._log_ui(f"[yellow]Fichier binaire / non texte ignoré:[/yellow] {path}")
+                self._log_ui(f"[yellow]Binaire/non texte ignore:[/yellow] {path}")
                 return
-        except OSError as e:
-            # Message dédié pour distinguer un binaire d'un accès impossible.
-            self._log_ui(f"[red]Impossible d'accéder au fichier:[/red] {path} ({e})")
+        except OSError as exc:
+            self._log_ui(f"[red]Acces fichier impossible:[/red] {path} ({exc})")
             return
 
         encoding = detect_text_encoding(path)
@@ -416,78 +201,102 @@ class USBIDEApp(App):
             text = path.read_text(encoding=encoding)
         except UnicodeDecodeError:
             text = path.read_text(encoding=encoding, errors="replace")
-        except OSError as e:
-            self._log_ui(f"[red]Erreur ouverture:[/red] {path} ({e})")
+        except OSError as exc:
+            self._log_ui(f"[red]Erreur ouverture:[/red] {path} ({exc})")
             return
-
-        self.current = OpenFile(path=path, encoding=encoding, dirty=False)
 
         editor = self.query_one(TextArea)
         self._loading_editor = True
-        try:
-            editor.text = text
-            # highlighting python si possible
-            if hasattr(editor, "language"):
-                editor.language = "python" if path.suffix.lower() == ".py" else None  # type: ignore[attr-defined]
-        finally:
-            self._loading_editor = False
+        editor.text = text
+        self._loading_editor = False
 
-        self._log_ui(f"[green]Ouvert[/green] {path}")
+        self.current = OpenFile(path=path, encoding=encoding, dirty=False)
         self._refresh_title()
 
-    def on_text_area_changed(self, event: object) -> None:
-        """Marque dirty dès qu'on édite (robuste aux variations d'API)."""
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if self._loading_editor or not self.current:
             return
-
-        # Selon la version, l'event expose `text_area` ou `control`
         ta = getattr(event, "text_area", None) or getattr(event, "control", None)
-        if ta is None:
-            return
         if getattr(ta, "id", None) != "editor":
             return
-
         self.current.dirty = True
         self._refresh_title()
 
-    # -------- Input command --------
+    # ---------- inputs ----------
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id != "cmd":
-            return
+        if event.input.id == "cmd":
+            await self._run_shell(event)
+        elif event.input.id == "codex_cmd":
+            await self._run_codex(event)
+
+    async def _run_shell(self, event: Input.Submitted) -> None:
         cmd = event.value.strip()
         event.input.value = ""
         if not cmd:
             return
-
         self._log_ui(f"\n[b]$[/b] {rich_escape(cmd)}")
-
         argv = windows_cmd_argv(cmd) if os.name == "nt" else ["sh", "-lc", cmd]
-        env = os.environ.copy()
-        env.setdefault("PYTHONUTF8", "1")
-        env.setdefault("PYTHONIOENCODING", "utf-8")
-        env = self._portable_env(env)
+        env = self._portable_env(os.environ.copy())
 
+        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+            if ev["kind"] == "line":
+                self._log_output(ev["text"])
+            else:
+                self._log_ui(f"[dim]{ev['text']}[/dim]")
+
+    async def _run_codex(self, event: Input.Submitted) -> None:
+        prompt = event.value.strip()
+        event.input.value = ""
+        if not prompt:
+            return
+
+        env = self._codex_env()
+        if not codex_cli_available(self.root_dir, env):
+            ok = await self._install_codex(force=False)
+            if not ok:
+                self._codex_log_ui("[red]Codex indisponible.[/red] (Ctrl+I pour installer)")
+                return
+
+        argv = codex_exec_argv(prompt, root_dir=self.root_dir, env=env, json_output=True)
+        self._codex_log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+
+        # Robustesse: on capture les erreurs de lancement pour eviter un crash UI.
         try:
             async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-                if ev["kind"] == "line":
-                    self._log_output(ev["text"])
-                else:
-                    self._log_ui(f"[dim]{ev['text']}[/dim]")
-        except FileNotFoundError as e:
-            self._log_ui(f"[red]Shell introuvable:[/red] {e}")
-        except Exception as e:
-            self._log_ui(f"[red]Erreur exécution commande:[/red] {e}")
+                if ev["kind"] != "line":
+                    self._codex_log_ui(f"[dim]{ev['text']}[/dim]")
+                    continue
 
-    # -------- Actions --------
+                line = ev["text"].strip()
+                if not line:
+                    continue
+
+                # Sortie JSONL => on essaye de parser pour enrichir un peu l'affichage,
+                # sinon on affiche la ligne brute.
+                try:
+                    obj = json.loads(line)
+                    if isinstance(obj, dict) and isinstance(obj.get("type"), str):
+                        self._codex_log_output(f"[{obj.get('type')}] {line}")
+                    else:
+                        self._codex_log_output(line)
+                except Exception:
+                    self._codex_log_output(line)
+        except FileNotFoundError as exc:
+            # Cas typique: codex ou node introuvable dans le PATH.
+            self._codex_log_ui(f"[red]Codex introuvable.[/red] {exc}")
+        except Exception as exc:
+            # Capture generique pour ne pas fermer l'application.
+            self._codex_log_ui(f"[red]Erreur execution Codex:[/red] {exc}")
+
+    # ---------- actions ----------
     def action_clear_log(self) -> None:
-        self.query_one(RichLog).clear()
-        # Message explicite en français pour l'utilisateur.
-        self._log_ui("[dim]journal effacé[/dim]")
+        self.query_one("#log", RichLog).clear()
+        self.query_one("#codex_log", RichLog).clear()
+        self._log_ui("[dim]journaux effaces[/dim]")
 
     def action_reload_tree(self) -> None:
         self.query_one(DirectoryTree).reload()
-        # Message explicite en français pour l'utilisateur.
-        self._log_ui("[dim]arborescence rechargée[/dim]")
+        self._log_ui("[dim]arborescence rechargee[/dim]")
 
     def action_save(self) -> bool:
         if not self.current:
@@ -502,188 +311,186 @@ class USBIDEApp(App):
         try:
             path.write_text(content, encoding=encoding)
             self.current.dirty = False
-            self._log_ui(f"[green]Sauvegardé[/green] {path}")
+            self._log_ui(f"[green]Sauvegarde[/green] {path}")
             return True
         except UnicodeEncodeError:
-            # Fallback en UTF-8 avec gestion d'erreur dédiée.
             try:
                 path.write_text(content, encoding="utf-8")
-            except OSError as e:
-                self._log_ui(f"[red]Erreur sauvegarde (UTF-8):[/red] {path} ({e})")
+            except OSError as exc:
+                self._log_ui(f"[red]Erreur sauvegarde (UTF-8):[/red] {path} ({exc})")
                 return False
             self.current.encoding = "utf-8"
             self.current.dirty = False
-            self._log_ui(f"[yellow]Sauvegardé en UTF-8 (fallback)[/yellow] {path}")
+            self._log_ui(f"[yellow]Sauvegarde en UTF-8 (fallback)[/yellow] {path}")
             return True
-        except OSError as e:
-            self._log_ui(f"[red]Erreur sauvegarde:[/red] {path} ({e})")
+        except OSError as exc:
+            self._log_ui(f"[red]Erreur sauvegarde:[/red] {path} ({exc})")
             return False
         finally:
             self._refresh_title()
 
     async def action_run(self) -> None:
-        if not self.current:
-            self._log_ui("[yellow]Aucun fichier à exécuter.[/yellow]")
+        if not self.current or self.current.path.suffix.lower() != ".py":
+            self._log_ui("[yellow]Ouvre un fichier .py.[/yellow]")
             return
+        if self.current.dirty:
+            self.action_save()
 
-        if self.current.path.suffix.lower() != ".py":
-            self._log_ui("[yellow]Exécution supportée uniquement pour les fichiers .py[/yellow]")
-            return
-
-        # Sauver avant run
-        if self.current.dirty and not self.action_save():
-            # Arrêt si la sauvegarde échoue pour éviter un run incohérent.
-            self._log_ui("[red]Exécution annulée : sauvegarde impossible.[/red]")
-            return
-
-        script = self.current.path
-        argv = python_run_argv(script)
-
-        # Affiche la commande (escape pour éviter markup cassé si chemin contient [])
+        argv = python_run_argv(self.current.path)
+        env = self._portable_env(os.environ.copy())
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
-        env = os.environ.copy()
-        env.setdefault("PYTHONUTF8", "1")
-        env.setdefault("PYTHONIOENCODING", "utf-8")
-        env = self._portable_env(env)
+        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+            if ev["kind"] == "line":
+                self._log_output(ev["text"])
+            else:
+                self._log_ui(f"[dim]{ev['text']}[/dim]")
+
+    def _codex_device_auth_enabled(self) -> bool:
+        return os.environ.get("USBIDE_CODEX_DEVICE_AUTH", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _codex_auto_install_enabled(self) -> bool:
+        return os.environ.get("USBIDE_CODEX_AUTO_INSTALL", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+    async def _install_codex(self, *, force: bool = False) -> bool:
+        env = self._codex_env()
+        if not force and codex_cli_available(self.root_dir, env):
+            return True
+        if not force and self._codex_install_attempted:
+            return False
+        if not force and not self._codex_auto_install_enabled():
+            self._log_ui("[yellow]Auto-install Codex desactive.[/yellow]")
+            return False
+
+        self._codex_install_attempted = True
+        package = os.environ.get("USBIDE_CODEX_NPM_PACKAGE", "@openai/codex")
+        prefix = codex_install_prefix(self.root_dir)
+        bin_dir = codex_bin_dir(prefix)
+        prefix.mkdir(parents=True, exist_ok=True)
+
+        self._log_ui(f"[b]Installation Codex[/b] package={rich_escape(package)} prefix={rich_escape(str(prefix))}")
 
         try:
-            async for ev in stream_subprocess(argv, cwd=script.parent, env=env):
-                if ev["kind"] == "line":
-                    self._log_output(ev["text"])
-                else:
-                    self._log_ui(f"[dim]{ev['text']}[/dim]")
+            argv = codex_install_argv(self.root_dir, prefix, package)
         except Exception as e:
-            self._log_ui(f"[red]Erreur exécution:[/red] {e}")
+            self._log_ui(f"[red]Impossible d'installer Codex:[/red] {e}")
+            return False
+
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+            if ev["kind"] == "line":
+                self._log_output(ev["text"])
+            else:
+                self._log_ui(f"[dim]{ev['text']}[/dim]")
+
+        ok = codex_cli_available(self.root_dir, env)
+        if ok:
+            self._log_ui(f"[green]Codex installe.[/green] (.bin: {rich_escape(str(bin_dir))})")
+        return ok
+
+    async def action_codex_install(self) -> None:
+        await self._install_codex(force=True)
 
     async def action_codex_login(self) -> None:
-        """Lance l'authentification Codex via le CLI."""
-        if not codex_cli_available(self.root_dir, self._codex_env()):
-            installed = await self._install_codex(force=False)
-            if not installed:
-                self._log_ui(
-                    "[red]CLI Codex introuvable.[/red] Installez-le puis relancez la commande."
-                )
+        env = self._codex_env()
+        if not codex_cli_available(self.root_dir, env):
+            ok = await self._install_codex(force=False)
+            if not ok:
+                self._log_ui("[red]Codex introuvable.[/red]")
                 return
 
-        # Message utilisateur pour préciser le flux d'authentification.
-        self._log_ui(
-            "[b]Authentification Codex[/b] : une page ChatGPT peut s'ouvrir "
-            "dans votre navigateur. Suivez les instructions affichées."
-        )
-
-        env = self._codex_env()
-        argv = codex_login_argv(self.root_dir, env)
+        self._log_ui("[b]Login Codex[/b] : navigateur/Device auth selon config.")
+        argv = codex_login_argv(self.root_dir, env, device_auth=self._codex_device_auth_enabled())
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
-        try:
-            async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-                if ev["kind"] == "line":
-                    self._log_output(ev["text"])
-                else:
-                    self._log_ui(f"[dim]{ev['text']}[/dim]")
-        except FileNotFoundError as e:
-            self._log_ui(f"[red]CLI Codex introuvable:[/red] {e}")
-        except Exception as e:
-            self._log_ui(f"[red]Erreur exécution Codex:[/red] {e}")
+        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+            if ev["kind"] == "line":
+                self._log_output(ev["text"])
+            else:
+                self._log_ui(f"[dim]{ev['text']}[/dim]")
 
     async def action_codex_check(self) -> None:
-        """Vérifie que Codex est utilisable (CLI présent + statut auth)."""
-        if not codex_cli_available(self.root_dir, self._codex_env()):
-            installed = await self._install_codex(force=False)
-            if not installed:
-                self._log_ui(
-                    "[red]CLI Codex introuvable.[/red] Installez-le puis relancez la commande."
-                )
-                return
-
-        self._log_ui("[b]Vérification Codex[/b] : contrôle du statut d'authentification.")
-
         env = self._codex_env()
+        if not codex_cli_available(self.root_dir, env):
+            self._log_ui("[yellow]Codex non installe.[/yellow]")
+            return
         argv = codex_status_argv(self.root_dir, env)
         self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
-        exit_code: Optional[int] = None
-        try:
-            async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-                if ev["kind"] == "line":
-                    self._log_output(ev["text"])
-                else:
-                    exit_code = ev["returncode"]
-                    # Message explicite pour aider l'utilisateur.
-                    if exit_code == 0:
-                        self._log_ui("[green]Codex prêt à l'emploi.[/green]")
-                    else:
-                        self._log_ui(
-                            "[yellow]Codex semble non authentifié ou en erreur.[/yellow] "
-                            "Relancez Ctrl+K pour vous connecter."
-                        )
-        except FileNotFoundError as e:
-            self._log_ui(f"[red]CLI Codex introuvable:[/red] {e}")
-        except Exception as e:
-            self._log_ui(f"[red]Erreur vérification Codex:[/red] {e}")
-
-    async def action_codex_install(self) -> None:
-        """Installe ou met à jour Codex dans l'environnement portable."""
-        await self._install_codex(force=True)
+        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+            if ev["kind"] == "line":
+                self._log_output(ev["text"])
+            else:
+                self._log_ui(f"[dim]{ev['text']}[/dim]")
 
     async def action_dev_tools(self) -> None:
-        """Installe les outils de dev localement si besoin."""
-        await self._install_dev_tools(force=False)
-
-    async def action_build_exe(self) -> None:
-        """Construit un exécutable via PyInstaller pour le script courant."""
-        if not self.current:
-            self._log_ui("[yellow]Aucun fichier ouvert.[/yellow]")
+        raw = os.environ.get("USBIDE_DEV_TOOLS", "ruff black mypy pytest")
+        tools = parse_tool_list(raw)
+        if not tools:
+            self._log_ui("[yellow]Liste outils vide.[/yellow]")
             return
-
-        if self.current.path.suffix.lower() != ".py":
-            self._log_ui("[yellow]La génération d'exe nécessite un fichier .py[/yellow]")
-            return
-
-        # Sauver avant build.
-        if self.current.dirty and not self.action_save():
-            # Arrêt si la sauvegarde échoue pour éviter un build incohérent.
-            self._log_ui("[red]Build annulé : sauvegarde impossible.[/red]")
-            return
-
-        if not pyinstaller_available(self.root_dir, self._tools_env()):
-            installed = await self._install_pyinstaller(force=False)
-            if not installed:
-                self._log_ui(
-                    "[red]PyInstaller introuvable.[/red] "
-                    "Installez-le puis relancez la commande."
-                )
-                return
-
-        script = self.current.path
-        dist_dir = self.root_dir / "dist"
-        build_dir = self.root_dir / "build"
-        dist_dir.mkdir(parents=True, exist_ok=True)
-        build_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            argv = pyinstaller_build_argv(
-                script,
-                dist_dir,
-                onefile=False,
-                work_dir=build_dir,
-                spec_dir=self.root_dir,
-            )
-        except ValueError as e:
-            self._log_ui(f"[red]Script invalide:[/red] {e}")
-            return
-
-        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
         env = self._tools_env()
-        try:
-            async for ev in stream_subprocess(argv, cwd=script.parent, env=env):
-                if ev["kind"] == "line":
-                    self._log_output(ev["text"])
-                else:
-                    self._log_ui(f"[dim]{ev['text']}[/dim]")
-        except FileNotFoundError as e:
-            self._log_ui(f"[red]PyInstaller introuvable:[/red] {e}")
-        except Exception as e:
-            self._log_ui(f"[red]Erreur build EXE:[/red] {e}")
+        prefix = tools_install_prefix(self.root_dir)
+        prefix.mkdir(parents=True, exist_ok=True)
+
+        wheelhouse = self._wheelhouse_path()
+        argv = pip_install_argv(prefix, tools, find_links=wheelhouse, no_index=wheelhouse is not None)
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+
+        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+            if ev["kind"] == "line":
+                self._log_output(ev["text"])
+            else:
+                self._log_ui(f"[dim]{ev['text']}[/dim]")
+
+    async def _install_pyinstaller(self, *, force: bool = False) -> bool:
+        env = self._tools_env()
+        if not force and pyinstaller_available(self.root_dir, env):
+            return True
+        if not force and self._pyinstaller_install_attempted:
+            return False
+
+        self._pyinstaller_install_attempted = True
+        prefix = tools_install_prefix(self.root_dir)
+        bin_dir = python_scripts_dir(prefix)
+        prefix.mkdir(parents=True, exist_ok=True)
+
+        wheelhouse = self._wheelhouse_path()
+        argv = pyinstaller_install_argv(prefix, find_links=wheelhouse, no_index=wheelhouse is not None)
+        self._log_ui(f"[b]Installation PyInstaller[/b] bin={rich_escape(str(bin_dir))}")
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+
+        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+            if ev["kind"] == "line":
+                self._log_output(ev["text"])
+            else:
+                self._log_ui(f"[dim]{ev['text']}[/dim]")
+
+        return pyinstaller_available(self.root_dir, env)
+
+    async def action_build_exe(self) -> None:
+        if not self.current or self.current.path.suffix.lower() != ".py":
+            self._log_ui("[yellow]Ouvre un fichier .py.[/yellow]")
+            return
+        if self.current.dirty:
+            self.action_save()
+
+        env = self._tools_env()
+        if not pyinstaller_available(self.root_dir, env):
+            ok = await self._install_pyinstaller(force=False)
+            if not ok:
+                self._log_ui("[red]PyInstaller indisponible.[/red]")
+                return
+
+        dist_dir = self.root_dir / "dist"
+        dist_dir.mkdir(parents=True, exist_ok=True)
+        argv = pyinstaller_build_argv(self.current.path, dist_dir, onefile=False, work_dir=self.root_dir / "tmp")
+        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+
+        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+            if ev["kind"] == "line":
+                self._log_output(ev["text"])
+            else:
+                self._log_ui(f"[dim]{ev['text']}[/dim]")
+

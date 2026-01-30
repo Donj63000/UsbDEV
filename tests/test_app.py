@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -37,7 +38,7 @@ class TestUSBIDEAppTitle(unittest.TestCase):
 
 class TestUSBIDEAppSave(unittest.TestCase):
     def test_action_save_ok(self) -> None:
-        # Une sauvegarde réussie doit retourner True et écrire le contenu.
+        # Une sauvegarde reussie doit retourner True et ecrire le contenu.
         with tempfile.TemporaryDirectory() as tmp_dir:
             root_dir = Path(tmp_dir)
             path = root_dir / "note.txt"
@@ -52,22 +53,23 @@ class TestUSBIDEAppSave(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), "Bonjour")
 
     def test_action_save_fallback_utf8(self) -> None:
-        # Un encodage incompatible doit déclencher un fallback UTF-8.
+        # Un encodage incompatible doit declencher un fallback UTF-8.
         with tempfile.TemporaryDirectory() as tmp_dir:
             root_dir = Path(tmp_dir)
             path = root_dir / "accent.txt"
             app = USBIDEApp(root_dir=root_dir)
             app.current = OpenFile(path=path, encoding="ascii", dirty=True)
             fake_editor = MagicMock()
-            fake_editor.text = "é"
+            accent = "\u00e9"
+            fake_editor.text = accent
 
             with patch.object(app, "query_one", return_value=fake_editor):
                 self.assertTrue(app.action_save())
 
-            self.assertEqual(path.read_text(encoding="utf-8"), "é")
+            self.assertEqual(path.read_text(encoding="utf-8"), accent)
 
     def test_action_save_oserror(self) -> None:
-        # Une erreur d'écriture doit retourner False.
+        # Une erreur d'ecriture doit retourner False.
         with tempfile.TemporaryDirectory() as tmp_dir:
             root_dir = Path(tmp_dir)
             path = root_dir / "note.txt"
@@ -83,7 +85,7 @@ class TestUSBIDEAppSave(unittest.TestCase):
 
 class TestUSBIDEAppPortableEnv(unittest.TestCase):
     def test_portable_env_defauts(self) -> None:
-        # Les variables doivent pointer vers des dossiers sur la clé.
+        # Les variables doivent pointer vers des dossiers sur la cle.
         with tempfile.TemporaryDirectory() as tmp_dir:
             root_dir = Path(tmp_dir)
             app = USBIDEApp(root_dir=root_dir)
@@ -94,9 +96,11 @@ class TestUSBIDEAppPortableEnv(unittest.TestCase):
             self.assertEqual(env["TMP"], str(root_dir / "tmp"))
             self.assertEqual(env["PYTHONNOUSERSITE"], "1")
             self.assertEqual(env["CODEX_HOME"], str(root_dir / "codex_home"))
+            self.assertEqual(env["NPM_CONFIG_CACHE"], str(root_dir / "cache" / "npm"))
+            self.assertEqual(env["NPM_CONFIG_UPDATE_NOTIFIER"], "false")
 
     def test_portable_env_ne_ecrase_pas(self) -> None:
-        # Les variables doivent être forcées sur la clé même si déjà définies.
+        # Les variables doivent etre forcees sur la cle meme si deja definies.
         with tempfile.TemporaryDirectory() as tmp_dir:
             root_dir = Path(tmp_dir)
             app = USBIDEApp(root_dir=root_dir)
@@ -107,6 +111,8 @@ class TestUSBIDEAppPortableEnv(unittest.TestCase):
                 "TMP": "W",
                 "PYTHONNOUSERSITE": "0",
                 "CODEX_HOME": "C",
+                "NPM_CONFIG_CACHE": "N",
+                "NPM_CONFIG_UPDATE_NOTIFIER": "true",
             }
             result = app._portable_env(env)
             self.assertEqual(result["PIP_CACHE_DIR"], str(root_dir / "cache" / "pip"))
@@ -115,12 +121,67 @@ class TestUSBIDEAppPortableEnv(unittest.TestCase):
             self.assertEqual(result["TMP"], str(root_dir / "tmp"))
             self.assertEqual(result["PYTHONNOUSERSITE"], "1")
             self.assertEqual(result["CODEX_HOME"], str(root_dir / "codex_home"))
+            self.assertEqual(result["NPM_CONFIG_CACHE"], str(root_dir / "cache" / "npm"))
+            self.assertEqual(result["NPM_CONFIG_UPDATE_NOTIFIER"], "false")
 
     def test_wheelhouse_path(self) -> None:
-        # Le wheelhouse doit être détecté quand le dossier existe.
+        # Le wheelhouse doit etre detecte quand le dossier existe.
         with tempfile.TemporaryDirectory() as tmp_dir:
             root_dir = Path(tmp_dir)
             wheelhouse = root_dir / "tools" / "wheels"
             wheelhouse.mkdir(parents=True, exist_ok=True)
             app = USBIDEApp(root_dir=root_dir)
             self.assertEqual(app._wheelhouse_path(), wheelhouse)
+
+
+class TestUSBIDEAppCodexFlags(unittest.TestCase):
+    def test_codex_device_auth_enabled(self) -> None:
+        # La variable d'environnement doit activer le device auth.
+        app = USBIDEApp(root_dir=Path.cwd())
+        with patch.dict(os.environ, {"USBIDE_CODEX_DEVICE_AUTH": "1"}, clear=True):
+            self.assertTrue(app._codex_device_auth_enabled())
+        with patch.dict(os.environ, {"USBIDE_CODEX_DEVICE_AUTH": "0"}, clear=True):
+            self.assertFalse(app._codex_device_auth_enabled())
+
+    def test_codex_auto_install_enabled(self) -> None:
+        # La variable d'environnement doit activer ou desactiver l'auto-install.
+        app = USBIDEApp(root_dir=Path.cwd())
+        with patch.dict(os.environ, {"USBIDE_CODEX_AUTO_INSTALL": "0"}, clear=True):
+            self.assertFalse(app._codex_auto_install_enabled())
+        with patch.dict(os.environ, {"USBIDE_CODEX_AUTO_INSTALL": "1"}, clear=True):
+            self.assertTrue(app._codex_auto_install_enabled())
+
+
+class TestUSBIDEAppCodexRun(unittest.IsolatedAsyncioTestCase):
+    async def test_run_codex_capture_erreur_lancement(self) -> None:
+        # Verifie qu'une erreur de lancement Codex ne fait pas crasher l'UI.
+        app = USBIDEApp(root_dir=Path.cwd())
+
+        class DummyInput:
+            def __init__(self) -> None:
+                self.value = ""
+
+        class DummyEvent:
+            def __init__(self, value: str) -> None:
+                self.value = value
+                self.input = DummyInput()
+
+        async def fake_stream(*_args, **_kwargs):
+            # On force une erreur de lancement pour tester la robustesse.
+            if False:
+                yield  # pragma: no cover
+            raise FileNotFoundError("codex missing")
+
+        dummy_log = MagicMock()
+        with (
+            patch("usbide.app.codex_cli_available", return_value=True),
+            patch("usbide.app.codex_exec_argv", return_value=["codex", "exec", "hello"]),
+            patch("usbide.app.stream_subprocess", fake_stream),
+            patch.object(app, "query_one", return_value=dummy_log),
+        ):
+            await app._run_codex(DummyEvent("hello"))
+
+        # Le message d'erreur doit etre ecrit dans le panneau Codex.
+        messages = [call.args[0] for call in dummy_log.write.call_args_list if call.args]
+        self.assertTrue(any("Codex introuvable" in msg for msg in messages))
+

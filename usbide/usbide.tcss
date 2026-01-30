@@ -1,13 +1,11 @@
-/* Styles UI principaux pour une interface plus élégante et lisible. */
-/* Remarque : commentaires en français conformément aux consignes. */
+/* Styles UI pour split logs (shell + codex). */
+/* Commentaires en francais pour respecter les consignes. */
 
-/* Fond global pour réduire la fatigue visuelle. */
 Screen {
   background: $surface-darken-1;
   color: $text;
 }
 
-/* Conteneur principal avec marges et respiration. */
 #main {
   height: 1fr;
   background: $surface;
@@ -15,54 +13,56 @@ Screen {
   padding: 1 1;
 }
 
-/* Arborescence : lisible, contrastée et agréable au focus. */
 #tree {
   width: 34;
   border: heavy $primary;
   background: $panel;
   color: $text;
   padding: 1;
-  /* Remplace le `gap` non supporté par une marge externe. */
   margin: 0 1 0 0;
-  scrollbar-color: $primary-lighten-1;
-  scrollbar-background: $surface-darken-1;
 }
 
 #tree:focus {
   border: heavy $primary-lighten-2;
 }
 
-/* Panneau de droite avec espacement cohérent. */
 #right {
   width: 1fr;
   background: $surface;
 }
 
-/* Zone d'édition mieux encadrée pour le confort. */
 #editor {
   height: 1fr;
   border: heavy $secondary;
   background: $surface;
   color: $text;
   padding: 1;
-  /* Espace vertical entre l'éditeur et la commande. */
   margin: 0 0 1 0;
-  scrollbar-color: $secondary-lighten-1;
-  scrollbar-background: $surface-darken-1;
 }
 
 #editor:focus {
   border: heavy $secondary-lighten-2;
 }
 
-/* Champ de commande : compact et immédiatement visible. */
+#bottom {
+  height: 14;
+}
+
+#shell {
+  width: 1fr;
+  margin: 0 1 0 0;
+}
+
+#codex {
+  width: 1fr;
+}
+
 #cmd {
   height: 3;
   border: heavy $accent;
   background: $panel;
   color: $text;
   padding: 0 1;
-  /* Espace vertical entre la commande et le journal. */
   margin: 0 0 1 0;
 }
 
@@ -70,18 +70,31 @@ Screen {
   border: heavy $accent-lighten-2;
 }
 
-/* Journal : espace généreux pour la lisibilité des logs. */
+#codex_cmd {
+  height: 3;
+  border: heavy $primary;
+  background: $panel;
+  color: $text;
+  padding: 0 1;
+  margin: 0 0 1 0;
+}
+
 #log {
-  height: 12;
+  height: 1fr;
   border: heavy $success;
   background: $panel;
   color: $text;
   padding: 1;
-  scrollbar-color: $success-lighten-1;
-  scrollbar-background: $surface-darken-1;
 }
 
-/* En-tête et pied de page cohérents avec le branding. */
+#codex_log {
+  height: 1fr;
+  border: heavy $secondary;
+  background: $panel;
+  color: $text;
+  padding: 1;
+}
+
 Header {
   background: $primary-darken-1;
   color: $text;
@@ -95,3 +108,4 @@ Footer {
   dock: bottom;
   padding: 0 1;
 }
+
