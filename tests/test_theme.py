@@ -16,6 +16,7 @@ class TestThemeFrancais(unittest.TestCase):
             "Connexion Codex",
             "Verifier Codex",
             "Installer Codex",
+            "Vue Codex",
             "Construire l'EXE",
             "Outils de dev",
             "Quitter",

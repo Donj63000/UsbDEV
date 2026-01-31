@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+import textwrap
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
@@ -59,6 +61,7 @@ class USBIDEApp(App):
         ("ctrl+k", "codex_login", "Connexion Codex"),
         ("ctrl+t", "codex_check", "Verifier Codex"),
         ("ctrl+i", "codex_install", "Installer Codex"),
+        ("ctrl+m", "toggle_codex_view", "Vue Codex"),
         ("ctrl+e", "build_exe", "Construire l'EXE"),
         ("ctrl+d", "dev_tools", "Outils de dev"),
         ("ctrl+q", "quit", "Quitter"),
@@ -71,6 +74,10 @@ class USBIDEApp(App):
         self._loading_editor: bool = False
         self._codex_install_attempted: bool = False
         self._pyinstaller_install_attempted: bool = False
+        # Mode compact par defaut pour rendre la sortie Codex lisible.
+        self._codex_compact_view: bool = True
+        # Cache simple pour eviter les doublons (type + contenu).
+        self._last_codex_message: Optional[str] = None
         # Journal des erreurs/problemes a la racine du workspace.
         self._bug_log_path: Path = self.root_dir / "bug.md"
 
@@ -122,6 +129,7 @@ class USBIDEApp(App):
             f"[b]ValDev Pro v1[/b]\nRoot: {self.root_dir}\n"
             "Shell: champ 'Commande' - Codex: champ 'Codex' - Ctrl+K login - Ctrl+I install\n"
         )
+        self._update_codex_title()
         self._refresh_title()
 
     def _handle_exception(self, error: Exception) -> None:
@@ -136,16 +144,41 @@ class USBIDEApp(App):
 
     # ---------- logs ----------
     def _log_ui(self, msg: str) -> None:
-        self.query_one("#log", RichLog).write(msg)
+        try:
+            self.query_one("#log", RichLog).write(msg)
+        except Exception:
+            # Evite un crash si l'UI n'est pas encore montee (tests/unitaires).
+            return
 
     def _log_output(self, msg: str) -> None:
-        self.query_one("#log", RichLog).write(rich_escape(msg))
+        try:
+            self.query_one("#log", RichLog).write(rich_escape(msg))
+        except Exception:
+            # Evite un crash si l'UI n'est pas encore montee (tests/unitaires).
+            return
 
     def _codex_log_ui(self, msg: str) -> None:
-        self.query_one("#codex_log", RichLog).write(msg)
+        try:
+            self.query_one("#codex_log", RichLog).write(msg)
+        except Exception:
+            # Evite un crash si l'UI n'est pas encore montee (tests/unitaires).
+            return
 
     def _codex_log_output(self, msg: str) -> None:
-        self.query_one("#codex_log", RichLog).write(rich_escape(msg))
+        try:
+            self.query_one("#codex_log", RichLog).write(rich_escape(msg))
+        except Exception:
+            # Evite un crash si l'UI n'est pas encore montee (tests/unitaires).
+            return
+
+    def _codex_mode_label(self) -> str:
+        """Libelle du mode d'affichage Codex (compact vs brut)."""
+        return "Compact" if self._codex_compact_view else "Brut"
+
+    def _update_codex_title(self) -> None:
+        """Mise a jour du titre du panneau Codex selon le mode courant."""
+        codex_log = self.query_one("#codex_log", RichLog)
+        codex_log.border_title = f"Sortie Codex ({self._codex_mode_label()})"
 
     def _record_issue(
         self,
@@ -258,11 +291,34 @@ class USBIDEApp(App):
         env["NPM_CONFIG_UPDATE_NOTIFIER"] = "false"
         return env
 
+    def _truthy(self, value: str | None) -> bool:
+        """Retourne True si la valeur correspond a un booleen "vrai"."""
+        return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _sanitize_codex_env(self, env: dict[str, str]) -> dict[str, str]:
+        """Nettoie les variables Codex pour eviter une auth involontaire."""
+        # Par defaut on force le login ChatGPT via CODEX_HOME, sauf override explicite.
+        allow_api_key = self._truthy(os.environ.get("USBIDE_CODEX_ALLOW_API_KEY"))
+        allow_custom_base = self._truthy(os.environ.get("USBIDE_CODEX_ALLOW_CUSTOM_BASE"))
+
+        if not allow_api_key:
+            env.pop("OPENAI_API_KEY", None)
+            env.pop("CODEX_API_KEY", None)
+
+        if not allow_custom_base:
+            env.pop("OPENAI_BASE_URL", None)
+            env.pop("OPENAI_API_BASE", None)
+            env.pop("OPENAI_API_HOST", None)
+
+        return env
+
     def _codex_env(self) -> dict[str, str]:
         env = os.environ.copy()
         env.setdefault("PYTHONUTF8", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
         env = self._portable_env(env)
+        # Evite que des variables globales cassent l'authentification Codex.
+        env = self._sanitize_codex_env(env)
         return codex_env(self.root_dir, env)
 
     def _tools_env(self) -> dict[str, str]:
@@ -365,15 +421,300 @@ class USBIDEApp(App):
             contexte="commande shell",
         )
 
+    async def _codex_logged_in(self, env: dict[str, str]) -> bool:
+        """Retourne True si `codex login status` indique une session valide."""
+        argv = codex_status_argv(self.root_dir, env)
+        rc: int | None = None
+        out_lines: list[str] = []
+
+        # On collecte la sortie pour aider l'utilisateur a corriger l'auth.
+        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+            if ev["kind"] == "line":
+                out_lines.append(ev["text"])
+            else:
+                rc = ev["returncode"]
+
+        if rc == 0:
+            return True
+
+        if self._codex_compact_view:
+            self._codex_log_action("Codex n'est pas authentifie dans ce CODEX_HOME.")
+            for line in out_lines:
+                if line.strip():
+                    self._codex_log_action(line)
+            self._codex_log_action("Fais Ctrl+K pour `codex login` (ou device auth).")
+        else:
+            self._codex_log_ui("[yellow]Codex n'est pas authentifie dans ce CODEX_HOME.[/yellow]")
+            for line in out_lines:
+                if line.strip():
+                    self._codex_log_output(line)
+            self._codex_log_ui("[yellow]Fais Ctrl+K pour `codex login` (ou device auth).[/yellow]")
+        return False
+
+    def _extract_status_code(self, msg: str) -> int | None:
+        """Extrait un code HTTP depuis un message d'erreur Codex."""
+        # Exemples attendus: "unexpected status 401", "last status: 403".
+        match = re.search(r"(?:unexpected status|last status[: ]+)\s*(\d{3})", msg, flags=re.IGNORECASE)
+        if not match:
+            match = re.search(r"\b(\d{3})\b", msg)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except Exception:
+            return None
+
+    def _codex_hint_for_status(self, status: int) -> str | None:
+        """Retourne un message d'aide selon le code HTTP."""
+        if status == 401:
+            return "401 = authentification invalide -> Ctrl+K (login) ou `codex logout` + login ChatGPT."
+        if status == 403:
+            return "403 = acces interdit -> verifie login ChatGPT (pas API key) / droits / reseau."
+        if status == 407:
+            return "407 = proxy auth required -> configure HTTP_PROXY/HTTPS_PROXY."
+        if status == 429:
+            return "429 = rate limit -> reessaie plus tard / ralentis."
+        if 500 <= status <= 599:
+            return "5xx = erreur serveur -> reessaie, possible incident cote OpenAI."
+        return None
+
+    def _codex_extract_text(self, content: object) -> list[str]:
+        """Extrait les textes utiles depuis un bloc 'content' Codex."""
+        textes: list[str] = []
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict):
+                    item_type = item.get("type")
+                    if item_type in {"output_text", "output_markdown", "text", "input_text"}:
+                        raw = item.get("text") or item.get("content")
+                        if isinstance(raw, str) and raw:
+                            textes.append(raw)
+                elif isinstance(item, str):
+                    textes.append(item)
+        elif isinstance(content, str):
+            textes.append(content)
+        return textes
+
+    def _codex_items_from_message_payload(self, payload: dict[str, object]) -> list[tuple[str, str]]:
+        """Extrait les messages (user/assistant) d'un payload de type message."""
+        items: list[tuple[str, str]] = []
+        if payload.get("type") != "message":
+            return items
+        role = payload.get("role")
+        if role not in {"assistant", "user"}:
+            return items
+        kind = "assistant" if role == "assistant" else "user"
+        textes = self._codex_extract_text(payload.get("content"))
+        if textes:
+            for texte in textes:
+                items.append((kind, texte))
+            return items
+        # Fallback si le contenu n'est pas structure.
+        msg = payload.get("message")
+        if isinstance(msg, str) and msg:
+            items.append((kind, msg))
+        return items
+
+    def _codex_iter_tool_calls(self, *containers: object) -> list[dict[str, object]]:
+        """Collecte les tool calls depuis plusieurs conteneurs JSON."""
+        appels: list[dict[str, object]] = []
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            tool_call = container.get("tool_call")
+            if isinstance(tool_call, dict):
+                appels.append(tool_call)
+            tool_calls = container.get("tool_calls") or container.get("tools")
+            if isinstance(tool_calls, list):
+                for call in tool_calls:
+                    if isinstance(call, dict):
+                        appels.append(call)
+        return appels
+
+    def _codex_format_action(self, payload: dict[str, object]) -> str | None:
+        """Formate une action/tool call pour un affichage compact."""
+        raw_type = str(payload.get("type") or "").lower()
+        is_action = raw_type in {"tool_call", "function_call", "action", "tool"}
+        if not is_action:
+            # Heuristique: presence d'un nom d'outil + arguments.
+            has_name = any(payload.get(k) for k in ("name", "tool", "tool_name"))
+            has_args = any(k in payload for k in ("arguments", "args", "input", "parameters"))
+            if not (has_name and has_args):
+                return None
+
+        name = payload.get("name") or payload.get("tool") or payload.get("tool_name") or payload.get("id")
+        args = payload.get("arguments") or payload.get("args") or payload.get("input") or payload.get("parameters")
+
+        if (not name and args is None) and isinstance(payload.get("tool_call"), dict):
+            tool_call = payload["tool_call"]
+            name = tool_call.get("name") or tool_call.get("tool") or tool_call.get("tool_name") or tool_call.get("id")
+            args = tool_call.get("arguments") or tool_call.get("args") or tool_call.get("input") or tool_call.get(
+                "parameters"
+            )
+
+        description = payload.get("message") or payload.get("description")
+        if isinstance(description, str) and description.strip() and not (name or args is not None):
+            return description.strip()
+
+        arg_text: str | None = None
+        if args is not None:
+            if isinstance(args, (dict, list)):
+                arg_text = json.dumps(args, ensure_ascii=False)
+            else:
+                arg_text = str(args)
+
+        if name and arg_text:
+            return f"{name}: {arg_text}"
+        if name:
+            return str(name)
+        if arg_text:
+            return arg_text
+        return None
+
+    def _codex_extract_display_items(self, obj: dict[str, object]) -> list[tuple[str, str]]:
+        """Retourne les elements a afficher (user/assistant/action) en vue compacte."""
+        items: list[tuple[str, str]] = []
+        event_type = obj.get("type")
+        payload = obj.get("payload")
+
+        def add(kind: str, msg: object) -> None:
+            if isinstance(msg, str) and msg:
+                items.append((kind, msg))
+
+        if event_type == "event_msg" and isinstance(payload, dict):
+            payload_type = payload.get("type")
+            msg = payload.get("message") or payload.get("text")
+            if payload_type in {"agent_message", "assistant_message"}:
+                add("assistant", msg)
+            elif payload_type in {"user_message", "user"}:
+                add("user", msg)
+            else:
+                action = self._codex_format_action(payload)
+                if action:
+                    add("action", action)
+
+        if event_type == "response_item" and isinstance(payload, dict):
+            items.extend(self._codex_items_from_message_payload(payload))
+            action = self._codex_format_action(payload)
+            if action:
+                add("action", action)
+
+        if event_type in {"response.output_text.done", "response.output_text"}:
+            add("assistant", obj.get("text"))
+
+        item = obj.get("item")
+        if isinstance(item, dict):
+            items.extend(self._codex_items_from_message_payload(item))
+            action = self._codex_format_action(item)
+            if action:
+                add("action", action)
+
+        for call in self._codex_iter_tool_calls(obj, payload, item):
+            action = self._codex_format_action(call)
+            if action:
+                add("action", action)
+
+        # De-dup simple pour eviter les doublons dans un meme event.
+        uniques: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for entry in items:
+            if entry in seen:
+                continue
+            seen.add(entry)
+            uniques.append(entry)
+        return uniques
+
+    def _codex_extract_messages(self, obj: dict[str, object]) -> list[str]:
+        """Retourne les messages d'assistant a afficher (mode compact)."""
+        return [msg for kind, msg in self._codex_extract_display_items(obj) if kind == "assistant"]
+
+    def _codex_hard_wrap(self, line: str, width: int) -> list[str]:
+        """Decoupe une ligne sans modifier les espaces (utile pour les blocs de code)."""
+        if width <= 0:
+            return [line]
+        return [line[i : i + width] for i in range(0, len(line), width)] or [""]
+
+    def _codex_wrap_text(self, text: str) -> list[str]:
+        """Wrap le texte en respectant la largeur du panneau Codex."""
+        try:
+            codex_log = self.query_one("#codex_log", RichLog)
+            width_attr = getattr(codex_log.size, "width", None)
+            width_value = width_attr if isinstance(width_attr, int) else 80
+        except Exception:
+            # Fallback quand l'UI n'est pas disponible (tests unitaires).
+            width_value = 80
+        width = width_value - 4 if width_value else 80
+        width = max(10, width)
+        lignes: list[str] = []
+        in_code = False
+        for raw in text.splitlines():
+            # On conserve les blocs de code Markdown, tout en evitant le depassement.
+            if raw.strip().startswith("```"):
+                in_code = not in_code
+                lignes.append(raw)
+                continue
+            if in_code:
+                if len(raw) <= width:
+                    lignes.append(raw)
+                else:
+                    lignes.extend(self._codex_hard_wrap(raw, width))
+                continue
+            if not raw.strip():
+                lignes.append("")
+                continue
+            if len(raw) <= width:
+                lignes.append(raw)
+                continue
+            wrapped = textwrap.fill(
+                raw,
+                width=width,
+                break_long_words=True,
+                break_on_hyphens=True,
+            )
+            lignes.extend(wrapped.splitlines())
+        return lignes
+
+    def _codex_log_entry(self, msg: str, *, label: str, kind: str) -> None:
+        """Affiche un bloc (Utilisateur/Assistant/Action) en evitant les doublons."""
+        cleaned = msg.strip()
+        if not cleaned:
+            return
+        fingerprint = f"{kind}:{cleaned}"
+        if self._last_codex_message == fingerprint:
+            return
+        self._last_codex_message = fingerprint
+        self._codex_log_ui(f"[b]{label}[/b]")
+        for line in self._codex_wrap_text(msg):
+            if line == "":
+                self._codex_log_ui("")
+            else:
+                self._codex_log_output(line)
+        self._codex_log_ui("")
+
+    def _codex_log_user_message(self, msg: str) -> None:
+        """Affiche un message utilisateur en vue compacte."""
+        self._codex_log_entry(msg, label="Utilisateur", kind="user")
+
+    def _codex_log_action(self, msg: str) -> None:
+        """Affiche une action effectuee par Codex."""
+        self._codex_log_entry(msg, label="Action", kind="action")
+
+    def _codex_log_message(self, msg: str) -> None:
+        """Affiche un message assistant en mode compact."""
+        self._codex_log_entry(msg, label="Assistant", kind="assistant")
+
     async def _run_codex(self, event: Input.Submitted) -> None:
         prompt = event.value.strip()
         event.input.value = ""
         if not prompt:
             return
+        if self._codex_compact_view:
+            # On affiche le message utilisateur pour garder un fil lisible.
+            self._codex_log_user_message(prompt)
 
         env = self._codex_env()
         if not codex_cli_available(self.root_dir, env):
-            ok = await self._install_codex(force=False)
+            ok = await self._install_codex(force=False, codex=True)
             if not ok:
                 self._log_issue(
                     "[red]Codex indisponible.[/red] (Ctrl+I pour installer)",
@@ -383,11 +724,17 @@ class USBIDEApp(App):
                 )
                 return
 
+        # Pre-check auth pour eviter des erreurs "unexpected status".
+        if not await self._codex_logged_in(env):
+            return
+
         argv = codex_exec_argv(prompt, root_dir=self.root_dir, env=env, json_output=True)
-        self._codex_log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+        if not self._codex_compact_view:
+            self._codex_log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
         # Robustesse: on capture les erreurs de lancement pour eviter un crash UI.
         try:
+            assistant_buffer: list[str] = []
             async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
                 if ev["kind"] != "line":
                     if ev["returncode"] not in (None, 0):
@@ -408,12 +755,96 @@ class USBIDEApp(App):
                 # sinon on affiche la ligne brute.
                 try:
                     obj = json.loads(line)
-                    if isinstance(obj, dict) and isinstance(obj.get("type"), str):
-                        self._codex_log_output(f"[{obj.get('type')}] {line}")
+                except Exception:
+                    if self._codex_compact_view:
+                        self._codex_log_action(line)
                     else:
                         self._codex_log_output(line)
-                except Exception:
-                    self._codex_log_output(line)
+                    continue
+
+                event_type = obj.get("type") if isinstance(obj, dict) else None
+                if self._codex_compact_view and isinstance(obj, dict):
+                    # Gestion du streaming texte (delta) en mode compact.
+                    if event_type in {"response.output_text.delta", "response.output_text"}:
+                        delta = obj.get("delta") or obj.get("text")
+                        if isinstance(delta, str) and delta:
+                            assistant_buffer.append(delta)
+                        continue
+                    if event_type in {"response.output_text.done", "response.output_item.done", "response.completed"}:
+                        if assistant_buffer:
+                            self._codex_log_message("".join(assistant_buffer))
+                            assistant_buffer.clear()
+
+                # Affiche les erreurs de maniere lisible avec diagnostic.
+                if event_type == "error" and isinstance(obj, dict):
+                    msg = str(obj.get("message", ""))
+                    status = self._extract_status_code(msg) if msg else None
+                    if self._codex_compact_view:
+                        if status:
+                            self._codex_log_action(f"Erreur Codex HTTP {status}: {msg}")
+                            hint = self._codex_hint_for_status(status)
+                            if hint:
+                                self._codex_log_action(hint)
+                        else:
+                            self._codex_log_action(f"Erreur Codex: {msg}")
+                    else:
+                        if status:
+                            self._codex_log_ui(f"[red]Erreur Codex HTTP {status}[/red] {rich_escape(msg)}")
+                            hint = self._codex_hint_for_status(status)
+                            if hint:
+                                self._codex_log_ui(f"[yellow]{rich_escape(hint)}[/yellow]")
+                        else:
+                            self._codex_log_ui(f"[red]Erreur Codex[/red] {rich_escape(msg)}")
+                    continue
+
+                if event_type == "turn.failed" and isinstance(obj, dict):
+                    err = obj.get("error")
+                    msg = ""
+                    if isinstance(err, dict):
+                        msg = str(err.get("message", "")) or str(err)
+                    else:
+                        msg = str(err)
+                    status = self._extract_status_code(msg) if msg else None
+                    if self._codex_compact_view:
+                        if status:
+                            self._codex_log_action(f"Task echouee HTTP {status}: {msg}")
+                            hint = self._codex_hint_for_status(status)
+                            if hint:
+                                self._codex_log_action(hint)
+                        else:
+                            self._codex_log_action(f"Task echouee: {msg}")
+                    else:
+                        if status:
+                            self._codex_log_ui(f"[red]Task echouee HTTP {status}[/red] {rich_escape(msg)}")
+                            hint = self._codex_hint_for_status(status)
+                            if hint:
+                                self._codex_log_ui(f"[yellow]{rich_escape(hint)}[/yellow]")
+                        else:
+                            self._codex_log_ui(f"[red]Task echouee[/red] {rich_escape(msg)}")
+                    continue
+
+                # Mode compact: on affiche uniquement les messages assistant.
+                if self._codex_compact_view and isinstance(obj, dict):
+                    items = self._codex_extract_display_items(obj)
+                    if items:
+                        for kind, message in items:
+                            if kind == "assistant":
+                                self._codex_log_message(message)
+                            elif kind == "user":
+                                self._codex_log_user_message(message)
+                            elif kind == "action":
+                                self._codex_log_action(message)
+                    # En mode compact on ignore le reste pour reduire le bruit.
+                    continue
+
+                # Mode brut: log enrichi pour debug.
+                if isinstance(obj, dict) and isinstance(obj.get("type"), str):
+                    self._codex_log_output(f"[{obj.get('type')}] {json.dumps(obj, ensure_ascii=False)}")
+                else:
+                    self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+            if self._codex_compact_view and assistant_buffer:
+                # Flush final si la stream delta n'a pas emis d'event de fin.
+                self._codex_log_message("".join(assistant_buffer))
         except FileNotFoundError as exc:
             # Cas typique: codex ou node introuvable dans le PATH.
             self._log_issue(
@@ -437,7 +868,17 @@ class USBIDEApp(App):
     def action_clear_log(self) -> None:
         self.query_one("#log", RichLog).clear()
         self.query_one("#codex_log", RichLog).clear()
+        # Reinitialise le cache pour afficher la prochaine reponse.
+        self._last_codex_message = None
         self._log_ui("[dim]journaux effaces[/dim]")
+
+    def action_toggle_codex_view(self) -> None:
+        """Bascule entre vue compacte et vue brute."""
+        self._codex_compact_view = not self._codex_compact_view
+        # Reset du cache pour eviter de masquer un nouveau message.
+        self._last_codex_message = None
+        self._update_codex_title()
+        self._codex_log_ui(f"[dim]Mode Codex: {self._codex_mode_label()}[/dim]")
 
     def action_reload_tree(self) -> None:
         self.query_one(DirectoryTree).reload()
@@ -522,7 +963,7 @@ class USBIDEApp(App):
     def _codex_auto_install_enabled(self) -> bool:
         return os.environ.get("USBIDE_CODEX_AUTO_INSTALL", "1").strip().lower() not in {"0", "false", "no", "off"}
 
-    async def _install_codex(self, *, force: bool = False) -> bool:
+    async def _install_codex(self, *, force: bool = False, codex: bool = False) -> bool:
         env = self._codex_env()
         if not force and codex_cli_available(self.root_dir, env):
             return True
@@ -533,6 +974,7 @@ class USBIDEApp(App):
                 "[yellow]Auto-install Codex desactive.[/yellow]",
                 niveau="avertissement",
                 contexte="installation_codex",
+                codex=codex,
             )
             return False
 
@@ -542,7 +984,11 @@ class USBIDEApp(App):
         bin_dir = codex_bin_dir(prefix)
         prefix.mkdir(parents=True, exist_ok=True)
 
-        self._log_ui(f"[b]Installation Codex[/b] package={rich_escape(package)} prefix={rich_escape(str(prefix))}")
+        log_ui = self._codex_log_ui if codex else self._log_ui
+        log_output = self._codex_log_output if codex else self._log_output
+
+        # Affichage dans le panneau Codex si on est en contexte Codex.
+        log_ui(f"[b]Installation Codex[/b] package={rich_escape(package)} prefix={rich_escape(str(prefix))}")
 
         try:
             argv = codex_install_argv(self.root_dir, prefix, package)
@@ -552,50 +998,55 @@ class USBIDEApp(App):
                 niveau="erreur",
                 contexte="installation_codex",
                 exc=e,
+                codex=codex,
             )
             return False
 
-        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+        log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
         await self._stream_and_log(
             argv,
             cwd=self.root_dir,
             env=env,
-            output_log=self._log_output,
-            ui_log=self._log_ui,
+            output_log=log_output,
+            ui_log=log_ui,
             contexte="installation Codex",
+            codex=codex,
         )
 
         ok = codex_cli_available(self.root_dir, env)
         if ok:
-            self._log_ui(f"[green]Codex installe.[/green] (.bin: {rich_escape(str(bin_dir))})")
+            log_ui(f"[green]Codex installe.[/green] (.bin: {rich_escape(str(bin_dir))})")
         return ok
 
     async def action_codex_install(self) -> None:
-        await self._install_codex(force=True)
+        await self._install_codex(force=True, codex=True)
 
     async def action_codex_login(self) -> None:
         env = self._codex_env()
         if not codex_cli_available(self.root_dir, env):
-            ok = await self._install_codex(force=False)
+            ok = await self._install_codex(force=False, codex=True)
             if not ok:
                 self._log_issue(
                     "[red]Codex introuvable.[/red]",
                     niveau="erreur",
                     contexte="codex_login",
+                    codex=True,
                 )
                 return
 
-        self._log_ui("[b]Login Codex[/b] : navigateur/Device auth selon config.")
+        # Log dans la sortie Codex pour plus de lisibilite.
+        self._codex_log_ui("[b]Login Codex[/b] : navigateur/Device auth selon config.")
         argv = codex_login_argv(self.root_dir, env, device_auth=self._codex_device_auth_enabled())
-        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+        self._codex_log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
         await self._stream_and_log(
             argv,
             cwd=self.root_dir,
             env=env,
-            output_log=self._log_output,
-            ui_log=self._log_ui,
+            output_log=self._codex_log_output,
+            ui_log=self._codex_log_ui,
             contexte="login Codex",
+            codex=True,
         )
 
     async def action_codex_check(self) -> None:
@@ -605,31 +1056,33 @@ class USBIDEApp(App):
                 "[yellow]Codex non installe.[/yellow]",
                 niveau="avertissement",
                 contexte="codex_status",
+                codex=True,
             )
             return
         # Diagnostic lisible pour comprendre rapidement la resolution Codex.
         node_path = node_executable(self.root_dir, env=env)
         entry_path = codex_entrypoint_js(codex_install_prefix(self.root_dir))
         resolved = shutil.which("codex", path=env.get("PATH"))
-        self._log_ui(f"[dim]node: {node_path or 'absent'}[/dim]")
-        self._log_ui(f"[dim]entrypoint: {entry_path or 'absent'}[/dim]")
-        self._log_ui(f"[dim]codex (PATH): {resolved or 'absent'}[/dim]")
+        self._codex_log_ui(f"[dim]node: {node_path or 'absent'}[/dim]")
+        self._codex_log_ui(f"[dim]entrypoint: {entry_path or 'absent'}[/dim]")
+        self._codex_log_ui(f"[dim]codex (PATH): {resolved or 'absent'}[/dim]")
         if os.name == "nt" and resolved:
             suffix = Path(resolved).suffix.lower()
             if suffix in {".cmd", ".bat"}:
-                self._log_ui("[dim]shim .cmd detecte: lancement via cmd.exe[/dim]")
+                self._codex_log_ui("[dim]shim .cmd detecte: lancement via cmd.exe[/dim]")
             elif suffix == ".ps1":
-                self._log_ui("[dim]shim .ps1 detecte: lancement via PowerShell[/dim]")
+                self._codex_log_ui("[dim]shim .ps1 detecte: lancement via PowerShell[/dim]")
         argv = codex_status_argv(self.root_dir, env)
-        self._log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
+        self._codex_log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 
         await self._stream_and_log(
             argv,
             cwd=self.root_dir,
             env=env,
-            output_log=self._log_output,
-            ui_log=self._log_ui,
+            output_log=self._codex_log_output,
+            ui_log=self._codex_log_ui,
             contexte="verification Codex",
+            codex=True,
         )
 
     async def action_dev_tools(self) -> None:

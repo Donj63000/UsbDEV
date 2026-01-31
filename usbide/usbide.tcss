@@ -45,7 +45,7 @@ Screen {
 }
 
 #bottom {
-  height: 14;
+  height: 18;
 }
 
 #shell {
@@ -92,7 +92,7 @@ Screen {
   border: heavy $secondary;
   background: $panel;
   color: $text;
-  padding: 1;
+  padding: 1 2;
 }
 
 Header {

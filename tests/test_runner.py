@@ -79,6 +79,12 @@ class TestCodexHelpers(unittest.TestCase):
             self.assertEqual(argv[0], "codex")
             self.assertEqual(argv[1:], ["login"])
 
+    def test_codex_login_argv_device_auth(self) -> None:
+        # Le mode device auth doit ajouter le flag --device-auth.
+        with patch("usbide.runner._is_windows", return_value=False):
+            argv = codex_login_argv(device_auth=True)
+            self.assertIn("--device-auth", argv)
+
     def test_codex_status_argv_default(self) -> None:
         # Verifie la commande de statut par defaut.
         # Force un environnement non-Windows pour un resultat deterministe.
@@ -97,6 +103,17 @@ class TestCodexHelpers(unittest.TestCase):
             self.assertIn("--model", argv)
             self.assertIn("gpt-5", argv)
             self.assertEqual(argv[-1], "hello")
+
+    def test_codex_exec_argv_portable_prioritaire(self) -> None:
+        # Le mode portable (node + entrypoint) doit etre prioritaire si present.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root_dir = Path(tmp_dir)
+            node_path = _create_portable_node(root_dir)
+            entry_path = _create_codex_package(codex_install_prefix(root_dir))
+            argv = codex_exec_argv("hello", root_dir=root_dir, env={}, json_output=True)
+            self.assertEqual(argv[0], str(node_path.resolve()))
+            self.assertEqual(argv[1], str(entry_path.resolve()))
+            self.assertIn("exec", argv)
 
     def test_codex_exec_argv_windows_cmd_shim(self) -> None:
         """Sur Windows, `codex` est souvent un `codex.cmd` (npm shim).

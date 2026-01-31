@@ -195,3 +195,153 @@ FileNotFoundError: codex missing
 - niveau: erreur
 - contexte: codex_exec
 - message: [red]Codex termine en erreur (rc=1).[/red]
+## 2026-01-31T00:50:01
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 469, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<59 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 232, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T01:09:52
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 469, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<59 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 232, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T01:45:13
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 570, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<68 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 272, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T01:45:31
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 570, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<68 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 272, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T01:45:55
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 570, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<68 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 272, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T01:59:47
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 570, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<68 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 272, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T02:02:51
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 570, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<68 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 359, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T02:03:09
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 570, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<68 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 362, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T10:03:50
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 738, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<105 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 404, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T10:04:12
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 738, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<105 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 404, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```

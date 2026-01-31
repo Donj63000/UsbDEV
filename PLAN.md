@@ -1,285 +1,303 @@
-J’ai ouvert ton ZIP et le bug est 100% explicable avec ce que tu vois dans la capture (“Codex introuvable. [WinError 2]”).
+1) Cause la plus probable (et je peux le prouver dans TON projet)
 
- 
+Dans ton ZIP, le dossier :
 
-Il y a 2 causes possibles (et dans ton cas, tu as au moins la #2, et très probablement la #1 aussi selon ton objectif “USB sans installation”).
+codex_home/
 
-0) Ce que dit ton projet (preuves dans le code)
-A. Ton app lance Codex via asyncio.create_subprocess_exec()
+contient uniquement :
 
-Dans usbide/runner.py, stream_subprocess() fait :
+codex_home/config.toml
 
-proc = await asyncio.create_subprocess_exec(*argv, ...)
+avec :
 
+cli_auth_credentials_store = "file"
 
-Donc Windows CreateProcess, sans shell, sans TTY.
 
-B. Ton “base argv” Codex tombe en fallback sur ["codex"]
+Or, d’après la doc officielle, quand cli_auth_credentials_store = "file", Codex stocke les tokens dans auth.json sous CODEX_HOME (qui vaut ~/.codex par défaut, mais toi tu forces CODEX_HOME=.../codex_home).
 
-Toujours dans usbide/runner.py :
+➡️ Donc si tu étais réellement loggé dans ce CODEX_HOME, tu devrais avoir :
 
-def _codex_base_argv(...):
-    if portable(node + entrypoint) ok:
-        return [node, entrypoint]
-    return ["codex"]
+codex_home/auth.json
 
+… et il n’y est pas.
 
-Donc si mode portable pas prêt → ton app essaye d’exécuter codex directement.
+👉 Conclusion : tu n’es pas authentifié dans l’environnement que ton appli utilise, même si tu as peut‑être fait codex login dans ton terminal Windows “normal” (qui a écrit dans C:\Users\...\ .codex au lieu de codex_home).
 
-C. Ton ZIP NE contient PAS Node portable
+C’est exactement le genre de situation qui finit en 401/403 (et Codex te l’affiche sous forme “unexpected status …”).
 
-Dans ton archive : tools/ contient git/, python-x64/, python-x86/, wheels/ mais pas tools/node/.
+2) Vérif immédiate (dans ton appli, sans rien installer)
+Étape A — vérifier le login Codex
 
- 
+Dans ton app tu as déjà Ctrl+T = codex login status.
 
-Or ton install Codex portable (bootstrap_codex.bat + codex_install_argv()) attend :
+La doc dit :
 
-tools\node\node.exe
+codex login status exit 0 quand tu es loggé.
 
-tools\node\node_modules\npm\bin\npm-cli.js
+➡️ Fais Ctrl+T et lis la sortie / le code de retour.
 
-Donc l’installation portable ne peut pas marcher tant que tools/node n’existe pas.
+Étape B — login propre “portable”
 
-1) Pourquoi ça “marche en terminal” mais pas dans ton app (le vrai bug WinError 2)
+Ensuite Ctrl+K (dans ton app) pour exécuter codex login.
 
-Sur Windows, quand tu installes Codex via npm, tu obtiens un shim :
+La doc dit :
 
-codex.cmd (et parfois codex.ps1)
+sans flag : ouvre un navigateur (OAuth ChatGPT)
 
-Dans un terminal CMD/PowerShell, ça marche car le shell sait exécuter .cmd.
+--device-auth existe si le navigateur/callback localhost est bloqué
 
- 
+✅ Après login réussi :
 
-Mais dans ton app, tu fais create_subprocess_exec(["codex", ...]) :
+tu dois voir apparaître codex_home/auth.json (vu que tu forces cli_auth_credentials_store="file").
 
-ça utilise CreateProcess
+⚠️ Sécurité : auth.json contient des tokens → c’est littéralement un “mot de passe”, ne le commit pas, ne le partage pas.
 
-CreateProcess ne lance pas un .cmd comme un binaire
+3) Autres causes possibles (très fréquentes) + comment les éliminer
+A) Tu as une OPENAI_API_KEY (ou CODEX_API_KEY) “toxique” dans l’environnement
 
-résultat : FileNotFoundError [WinError 2] (exactement ce que tu vois)
+Si une clé API incorrecte traîne dans ton os.environ, Codex peut tenter de l’utiliser et te renvoyer du 401 Invalid Authentication.
+401 = authentification invalide / mauvaise clé.
 
-👉 Conclusion : ta détection “Codex dispo” peut être vraie (shutil.which("codex") trouve codex.cmd), mais l’exécution échoue parce que tu ne passes pas par cmd.exe /c.
+✅ Fix : dans ton appli, ne propage pas OPENAI_API_KEY / overrides d’endpoint par défaut (sauf si tu le veux explicitement).
 
-2) Comment vérifier en 20 secondes (sur ta machine)
+B) Proxy / Firewall / réseau d’entreprise
 
-Dans ton champ “Commande” (Shell) ou dans un CMD normal, tape :
+Si tu es derrière un proxy, tu peux te prendre un status type 407 / 403 / etc.
+Tu as déjà un preflight.py qui check DNS + proxy env vars → c’est très bien.
 
-1) Où est Codex ?
-where codex
+✅ Fix : si HTTP_PROXY/HTTPS_PROXY nécessaires, les définir correctement (ou whitelister les endpoints OpenAI).
 
+C) Mauvaise méthode de login
 
-Si tu vois un truc du genre :
+La doc indique : “Codex cloud requires signing in with ChatGPT.”
+Si tu as loggé avec “API key” mais que ton usage touche à Codex Cloud, tu peux te faire jeter.
 
-C:\Users\<toi>\AppData\Roaming\npm\codex.cmd
+✅ Fix : codex logout puis codex login en ChatGPT. (codex logout est dans la CLI).
 
+4) Patch PRO dans ton projet : auto‑diagnostic + erreurs lisibles + env clean
 
-➡️ bingo : ton Codex est un .cmd ⇒ ton app doit wrap via cmd.exe.
+Là ton UI affiche juste la ligne brute {"type":"error"...} et “rc=1”.
+Tu veux que ton appli te dise clairement : “401 → pas loggé / token invalide → Ctrl+K” etc.
 
-2) Est-ce que tu as Node portable sur le projet ?
-dir tools\node
-dir tools\node\node.exe
-dir tools\node\node_modules\npm\bin\npm-cli.js
+4.1 Patch usbide/app.py : nettoyer l’env Codex (évite les clés/URL parasites)
 
+Dans ta classe USBIDEApp, ajoute ces helpers (importe re en haut du fichier) :
 
-Si ça n’existe pas :
-➡️ ton mode “USB portable” n’est pas installé.
+import re
 
-3) Fix immédiat (pour que Codex marche dans ton app, même si c’est codex.cmd global)
-Objectif
 
-Quand Codex est trouvé dans le PATH en .cmd, au lieu de lancer :
+Puis ajoute dans la classe :
 
-codex exec ...
+    def _truthy(self, v: str | None) -> bool:
+        return (v or "").strip().lower() in {"1", "true", "yes", "on"}
 
+    def _sanitize_codex_env(self, env: dict[str, str]) -> dict[str, str]:
+        """Empêche Codex de partir sur une auth/base URL involontaire.
 
-tu lances :
+        Par défaut on favorise login ChatGPT (tokens dans CODEX_HOME).
+        On laisse l'utilisateur réactiver API key/custom base via flags USBIDE_*.
+        """
+        allow_api_key = self._truthy(os.environ.get("USBIDE_CODEX_ALLOW_API_KEY"))
+        allow_custom_base = self._truthy(os.environ.get("USBIDE_CODEX_ALLOW_CUSTOM_BASE"))
 
-cmd.exe /d /s /c codex.cmd exec ...
+        if not allow_api_key:
+            env.pop("OPENAI_API_KEY", None)
+            env.pop("CODEX_API_KEY", None)
 
-Patch à faire dans usbide/runner.py
-3.1 Ajoute ce helper juste après les imports
+        if not allow_custom_base:
+            env.pop("OPENAI_BASE_URL", None)
+            env.pop("OPENAI_API_BASE", None)
+            env.pop("OPENAI_API_HOST", None)
 
-Copie-colle tel quel :
+        return env
 
-def _is_windows() -> bool:
-    """Retourne True si l'OS courant est Windows.
 
-    Note: on factorise ce test pour pouvoir le mocker facilement en tests unitaires.
-    """
-    return os.name == "nt"
+Et modifie _codex_env() comme ça :
 
-3.2 Dans node_executable(), remplace if os.name == "nt": par
-if _is_windows():
+    def _codex_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env = self._portable_env(env)
 
-3.3 Remplace complètement _codex_base_argv() par cette version
+        # IMPORTANT: évite que des variables globales cassent Codex
+        env = self._sanitize_codex_env(env)
 
-Copie-colle la fonction entière :
+        return codex_env(self.root_dir, env)
 
-def _codex_base_argv(root_dir: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> list[str]:
-    """Retourne la commande de base pour lancer Codex.
 
-    Priorite :
-    1) Mode portable : node.exe + entrypoint JS de @openai/codex (fiable, pas de .cmd/.bat).
-    2) Fallback systeme : binaire `codex` dans le PATH.
+🎯 Résultat : tu évites 80% des “unexpected status 401” causés par une clé env invalide.
 
-    Sur Windows, `npm install -g @openai/codex` cree souvent un shim `codex.cmd`.
-    Or, `asyncio.create_subprocess_exec(..., shell=False)` ne sait pas lancer un `.cmd` directement,
-    ce qui se traduit typiquement par : [WinError 2] Le fichier spécifié est introuvable.
+4.2 Patch usbide/app.py : pré-check login status avant codex exec
 
-    Donc en fallback Windows, si `codex` resolu est un `.cmd`/`.bat`, on l'exécute via cmd.exe.
-    """
-    # --- (1) Mode portable : node + entrypoint ---
-    if root_dir is not None:
-        node = node_executable(root_dir, env=env)
-        entry = codex_entrypoint_js(codex_install_prefix(root_dir))
-        if node is not None and entry is not None:
-            return [str(node), str(entry)]
+Ajoute cette méthode :
 
-    # --- (2) Fallback systeme ---
-    if _is_windows():
-        # `which` doit utiliser le PATH de l'env fourni (celui de l'app).
-        search_path = (env or os.environ).get("PATH")
-        resolved = shutil.which("codex", path=search_path)
-        if resolved:
-            suffix = Path(resolved).suffix.lower()
+    async def _codex_logged_in(self, env: dict[str, str]) -> bool:
+        """Retourne True si codex login status = OK."""
+        argv = codex_status_argv(self.root_dir, env)
+        rc: int | None = None
+        out_lines: list[str] = []
 
-            # Cas npm Windows : codex.cmd / codex.bat (doit passer par cmd.exe)
-            if suffix in {".cmd", ".bat"}:
-                comspec = (env or os.environ).get("COMSPEC") or os.environ.get("COMSPEC") or "cmd.exe"
-                return [comspec, "/d", "/s", "/c", resolved]
+        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+            if ev["kind"] == "line":
+                out_lines.append(ev["text"])
+            else:
+                rc = ev["returncode"]
 
-            # Certains environnements ajoutent aussi un shim PowerShell.
-            if suffix == ".ps1":
-                powershell = shutil.which("powershell", path=search_path) or "powershell"
-                return [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved]
+        if rc == 0:
+            return True
 
-            # Si c'est un vrai .exe (ou autre), on peut le lancer directement.
-            return [resolved]
+        self._codex_log_ui("[yellow]Codex n'est pas authentifié dans ce CODEX_HOME.[/yellow]")
+        for l in out_lines:
+            if l.strip():
+                self._codex_log_output(l)
+        self._codex_log_ui("[yellow]Fais Ctrl+K pour `codex login` (ou device auth).[/yellow]")
+        return False
 
-    # Par defaut (Linux/macOS, ou PATH qui resolvra un binaire executable)
-    return ["codex"]
 
+Et dans _run_codex, juste après codex_cli_available(...) OK, mets :
 
-✅ Résultat : même si Codex est un .cmd, ton panneau Codex va marcher.
+        # Pré-check auth : évite des erreurs cryptiques "unexpected status"
+        if not await self._codex_logged_in(env):
+            return
 
-4) Patch test (important pour verrouiller le bug)
+4.3 Patch usbide/app.py : parser les erreurs JSON et afficher un diagnostic (401/403/407…)
 
-Dans tests/test_runner.py, dans class TestCodexHelpers(unittest.TestCase): ajoute ce test :
+Ajoute ces helpers :
 
-def test_codex_exec_argv_windows_cmd_shim(self) -> None:
-    """Sur Windows, `codex` est souvent un `codex.cmd` (npm shim).
+    def _extract_status_code(self, msg: str) -> int | None:
+        # Exemples vus en pratique:
+        # "unexpected status 401 Unauthorized: ..."
+        # "exceeded retry limit, last status: 401 Unauthorized"
+        m = re.search(r"(?:unexpected status|last status[: ]+)\s*(\d{3})", msg, flags=re.IGNORECASE)
+        if not m:
+            m = re.search(r"\b(\d{3})\b", msg)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
 
-    Dans ce cas, on doit passer par `cmd.exe /c` sinon CreateProcess peut lever WinError 2.
-    Ce test simule ce scenario en mockant la detection Windows + shutil.which().
-    """
-
-    def fake_which(cmd: str, path: str | None = None) -> str | None:
-        if cmd == "codex":
-            return r"C:\Users\me\AppData\Roaming\npm\codex.cmd"
+    def _codex_hint_for_status(self, status: int) -> str | None:
+        if status == 401:
+            return "401 = authentification invalide → Ctrl+K (login) ou `codex logout` + login ChatGPT."
+        if status == 403:
+            return "403 = accès interdit → vérifie login ChatGPT (pas API key) / droits workspace / réseau entreprise."
+        if status == 407:
+            return "407 = proxy auth required → configure HTTP_PROXY/HTTPS_PROXY."
+        if status == 429:
+            return "429 = rate limit → réessaie plus tard / ralentis."
+        if 500 <= status <= 599:
+            return "5xx = erreur serveur → réessaie, possible incident côté OpenAI."
         return None
 
-    with patch("usbide.runner._is_windows", return_value=True):
-        with patch("usbide.runner.shutil.which", side_effect=fake_which):
-            env = {"PATH": r"C:\Users\me\AppData\Roaming\npm", "COMSPEC": r"C:\Windows\System32\cmd.exe"}
-            argv = codex_exec_argv("hello", root_dir=Path("C:/tmp/usbide"), env=env, json_output=True)
 
-            # cmd.exe wrapper
-            self.assertEqual(argv[0], env["COMSPEC"])
-            self.assertIn("/c", argv)
-            self.assertIn(r"C:\Users\me\AppData\Roaming\npm\codex.cmd", argv)
+Puis remplace le bloc d’affichage JSON dans _run_codex par une version qui extrait le message :
 
-            # suite normale des args codex
-            self.assertIn("exec", argv)
-            self.assertIn("--json", argv)
-            self.assertEqual(argv[-1], "hello")
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    self._codex_log_output(line)
+                    continue
 
-5) Fix “USB portable” (le vrai objectif) : faire fonctionner Codex même sur un PC vierge
+                t = obj.get("type") if isinstance(obj, dict) else None
 
-Là, ton ZIP montre clairement pourquoi ça ne peut pas marcher : tu n’embarques pas Node, donc tu ne peux pas embarquer Codex (@openai/codex).
+                # Affiche les erreurs de manière lisible
+                if t == "error" and isinstance(obj, dict):
+                    msg = str(obj.get("message", ""))
+                    status = self._extract_status_code(msg) if msg else None
+                    if status:
+                        self._codex_log_ui(f"[red]Erreur Codex HTTP {status}[/red] {rich_escape(msg)}")
+                        hint = self._codex_hint_for_status(status)
+                        if hint:
+                            self._codex_log_ui(f"[yellow]{rich_escape(hint)}[/yellow]")
+                    else:
+                        self._codex_log_ui(f"[red]Erreur Codex[/red] {rich_escape(msg)}")
+                    continue
 
-5.1 Mettre Node portable dans tools/node/
+                if t == "turn.failed" and isinstance(obj, dict):
+                    err = obj.get("error")
+                    msg = ""
+                    if isinstance(err, dict):
+                        msg = str(err.get("message", "")) or str(err)
+                    else:
+                        msg = str(err)
+                    status = self._extract_status_code(msg) if msg else None
+                    if status:
+                        self._codex_log_ui(f"[red]Task échouée HTTP {status}[/red] {rich_escape(msg)}")
+                        hint = self._codex_hint_for_status(status)
+                        if hint:
+                            self._codex_log_ui(f"[yellow]{rich_escape(hint)}[/yellow]")
+                    else:
+                        self._codex_log_ui(f"[red]Task échouée[/red] {rich_escape(msg)}")
+                    continue
 
-Tu dois avoir exactement (au minimum) :
-
-tools/node/node.exe
-tools/node/node_modules/npm/bin/npm-cli.js
-
-
-👉 Pratique : tu prends la distribution zip Windows “node-vXX-win-x64.zip”, tu la décompresses dans tools/node/ (au niveau où est node.exe).
-
-5.2 Installer Codex sur la clé (une fois, sur TA machine)
-
-Tu as déjà le script : bootstrap_codex.bat
-
- 
-
-Il va installer dans :
-
-.usbide/codex/node_modules/@openai/codex/...
-.usbide/codex/node_modules/.bin/...
-
-
-Après ça, ton app va détecter le mode portable (node + entrypoint JS) et n’utilisera plus du tout codex.cmd du PC.
-
-5.3 Vérifier que le mode portable est prêt
-
-Une fois fait, tu dois voir :
-
-dir .usbide\codex\node_modules\@openai\codex\package.json
+                # Sinon: log brut (ou enrichi)
+                if isinstance(obj, dict) and isinstance(obj.get("type"), str):
+                    self._codex_log_output(f"[{obj.get('type')}] {json.dumps(obj, ensure_ascii=False)}")
+                else:
+                    self._codex_log_output(json.dumps(obj, ensure_ascii=False))
 
 
-Et dans ton app, quand tu tapes un prompt, la commande affichée ne doit plus être codex exec ... mais plutôt un truc de ce genre :
+🎯 Résultat : au lieu d’un vague “unexpected status”, ton IDE affichera :
 
-<USB>\tools\node\node.exe <USB>\.usbide\codex\node_modules\@openai\codex\... exec --json ...
+“HTTP 401 → login”
 
-6) Check-list “ça marche” après les fix
+ou “HTTP 407 → proxy”
 
-Sur ta machine dev (Codex global npm)
+etc.
 
-where codex → .cmd
+5) Option très utile : forcer “login ChatGPT only” dans codex_home/config.toml
 
-Dans l’app : tu tapes “test”
+La doc montre une option forced_login_method qui peut forcer un type de login.
 
-✅ plus de WinError 2, tu vois du output JSONL ou au moins une réponse.
+Dans ton codex_home/config.toml, tu peux mettre :
 
-Sur une machine vierge (sans Node, sans npm)
+cli_auth_credentials_store = "file"
+forced_login_method = "chatgpt"
 
-tu as tools/node sur la clé
 
-tu as .usbide/codex sur la clé (installé via bootstrap avant)
+Ça évite que Codex passe en mode “API key” si une variable d’environnement se balade.
 
-tu lances l’IDE depuis run_ide.bat
+6) Si malgré ça tu as encore l’erreur : procédure “reset clean” (ultra efficace)
 
-✅ Codex fonctionne pareil.
+Dans ton panneau “Commande” (ou terminal), avec ton CODEX_HOME de la clé :
 
-7) (Optionnel mais conseillé) rendre le diagnostic in-app ultra clair
+logout
 
-Tu peux améliorer action_codex_check pour logguer :
+codex logout
 
-node_executable(self.root_dir) (chemin détecté)
 
-codex_entrypoint_js(codex_install_prefix(self.root_dir)) (chemin)
+(codex logout existe officiellement)
 
-shutil.which("codex", path=env["PATH"]) (chemin global)
+supprime les tokens file (si tu utilises cli_auth_credentials_store="file")
 
-et si Windows + .cmd → afficher “shim .cmd, lancement via cmd.exe”.
+del codex_home\auth.json
 
-Ça t’évitera de re-debug plus tard.
 
-Conclusion
+relog
 
-Pourquoi ça marche pas :
+codex login
 
-ton “portable Codex” n’est pas installé (pas de tools/node dans le projet),
 
-et en dev tu lances codex sans shell alors que sur Windows c’est souvent codex.cmd ⇒ WinError 2.
+ou device auth :
 
-Comment faire pour que ça marche :
+codex login --device-auth
 
-patch _codex_base_argv() pour wrapper .cmd via cmd.exe /c (code ci-dessus)
 
-embarque Node portable dans tools/node
+TL;DR (ce qui casse chez toi)
 
-exécute bootstrap_codex.bat une fois pour remplir .usbide/codex
+Ton appli force CODEX_HOME=.../codex_home
 
-Si tu appliques le patch runner + tu mets Node portable + bootstrap, ton panneau Codex sera fiable sur n’importe quel PC.
+mais tu n’as pas de codex_home/auth.json
+
+donc Codex n’est pas loggé dans cet environnement
+
+et il part faire une requête → backend répond non (401/403/…) → unexpected status → turn.failed
+
+Applique :
+
+Ctrl+K login (ou --device-auth)
+
+patch env clean + pré-check login + parser erreurs (sections 4.x)

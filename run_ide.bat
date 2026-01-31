@@ -8,6 +8,10 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
 REM === Choisis ton Python portable ===
 set "PY=%ROOT%\tools\python-x64\python.exe"
+REM Fallback local si le Python portable n'est pas present.
+if not exist "%PY%" set "PY=%ROOT%\.venv\Scripts\python.exe"
+REM Dernier fallback: python systeme si aucune autre option n'est dispo.
+if not exist "%PY%" set "PY=python"
 
 REM === Tout ce qui ecrit doit ecrire sur la cle ===
 set "PIP_CACHE_DIR=%ROOT%\cache\pip"
