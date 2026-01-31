@@ -254,6 +254,12 @@ class TestUSBIDEAppCodexCompactView(unittest.TestCase):
         items = app._codex_extract_display_items(obj)
         self.assertTrue(any(kind == "action" and "list_files" in msg for kind, msg in items))
 
+    def test_codex_extract_display_items_item_completed(self) -> None:
+        # La vue compacte doit lire les items completes (agent_message).
+        app = USBIDEApp(root_dir=Path.cwd())
+        obj = {"type": "item.completed", "item": {"type": "agent_message", "text": "Salut"}}
+        self.assertIn(("assistant", "Salut"), app._codex_extract_display_items(obj))
+
     def test_codex_extract_text_filtre_types(self) -> None:
         # Les types inconnus ne doivent pas polluer la sortie.
         app = USBIDEApp(root_dir=Path.cwd())
@@ -353,6 +359,20 @@ class TestUSBIDEAppCodexAffichage(unittest.TestCase):
             app._codex_log_message("Bonjour")
 
         self.assertEqual(log_ui.call_count + log_output.call_count, appel_1)
+
+    def test_codex_log_message_utilise_vert(self) -> None:
+        # Les reponses assistant doivent etre colorees en vert.
+        app = USBIDEApp(root_dir=Path.cwd())
+        with (
+            patch.object(app, "_codex_wrap_text", return_value=["ligne"]),
+            patch.object(app, "_codex_log_ui") as log_ui,
+            patch.object(app, "_codex_log_output") as log_output,
+        ):
+            app._codex_log_message("Bonjour")
+
+        messages_ui = [call.args[0] for call in log_ui.call_args_list if call.args]
+        self.assertTrue(any("[green]" in msg for msg in messages_ui))
+        self.assertFalse(log_output.called)
 
     def test_update_codex_title_reflete_mode(self) -> None:
         # Le titre du panneau doit mentionner le mode courant.
@@ -493,6 +513,28 @@ class TestUSBIDEAppCodexLoginStatus(unittest.IsolatedAsyncioTestCase):
         messages_out = [call.args[0] for call in fake_output.call_args_list if call.args]
         messages = messages_ui + messages_out
         self.assertTrue(any("Codex n'est pas authentifie" in msg for msg in messages))
+
+    async def test_codex_logged_in_capture_erreur_lancement(self) -> None:
+        # Une erreur de lancement doit etre loguee et ne pas faire crasher l'UI.
+        app = USBIDEApp(root_dir=Path.cwd())
+
+        async def fake_stream(*_args, **_kwargs):
+            if False:
+                yield  # pragma: no cover
+            raise FileNotFoundError("codex missing")
+
+        with (
+            patch("usbide.app.codex_status_argv", return_value=["codex", "login", "status"]),
+            patch("usbide.app.stream_subprocess", fake_stream),
+            patch.object(app, "_log_issue") as log_issue,
+            patch.object(app, "_codex_log_action") as log_action,
+        ):
+            ok = await app._codex_logged_in(env={})
+
+        self.assertFalse(ok)
+        self.assertTrue(log_issue.called)
+        self.assertTrue(log_action.called)
+        self.assertTrue(log_issue.call_args.kwargs.get("codex"))
 
 
 class TestUSBIDEAppCodexActions(unittest.IsolatedAsyncioTestCase):

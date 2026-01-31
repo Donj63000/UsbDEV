@@ -13,6 +13,7 @@ from typing import Callable, Optional, Sequence
 
 from rich.markup import escape as rich_escape
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DirectoryTree, Footer, Header, Input, RichLog, TextArea
 
@@ -53,18 +54,19 @@ class USBIDEApp(App):
     CSS_PATH = "usbide.tcss"
 
     # Ordre volontaire pour regrouper les actions d'execution avant les outils dev.
+    # Priorite sur les raccourcis Codex pour eviter la capture par les widgets d'entree.
     BINDINGS = [
-        ("ctrl+s", "save", "Sauvegarder"),
-        ("f5", "run", "Executer"),
-        ("ctrl+l", "clear_log", "Effacer les journaux"),
-        ("ctrl+r", "reload_tree", "Recharger l'arborescence"),
-        ("ctrl+k", "codex_login", "Connexion Codex"),
-        ("ctrl+t", "codex_check", "Verifier Codex"),
-        ("ctrl+i", "codex_install", "Installer Codex"),
-        ("ctrl+m", "toggle_codex_view", "Vue Codex"),
-        ("ctrl+e", "build_exe", "Construire l'EXE"),
-        ("ctrl+d", "dev_tools", "Outils de dev"),
-        ("ctrl+q", "quit", "Quitter"),
+        Binding("ctrl+s", "save", "Sauvegarder"),
+        Binding("f5", "run", "Executer"),
+        Binding("ctrl+l", "clear_log", "Effacer les journaux"),
+        Binding("ctrl+r", "reload_tree", "Recharger l'arborescence"),
+        Binding("ctrl+k", "codex_login", "Connexion Codex", priority=True),
+        Binding("ctrl+t", "codex_check", "Verifier Codex", priority=True),
+        Binding("ctrl+i", "codex_install", "Installer Codex", priority=True),
+        Binding("ctrl+m", "toggle_codex_view", "Vue Codex", priority=True),
+        Binding("ctrl+e", "build_exe", "Construire l'EXE"),
+        Binding("ctrl+d", "dev_tools", "Outils de dev"),
+        Binding("ctrl+q", "quit", "Quitter"),
     ]
 
     def __init__(self, root_dir: Path) -> None:
@@ -428,11 +430,43 @@ class USBIDEApp(App):
         out_lines: list[str] = []
 
         # On collecte la sortie pour aider l'utilisateur a corriger l'auth.
-        async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
-            if ev["kind"] == "line":
-                out_lines.append(ev["text"])
-            else:
-                rc = ev["returncode"]
+        try:
+            async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+                if ev["kind"] == "line":
+                    out_lines.append(ev["text"])
+                else:
+                    rc = ev["returncode"]
+        except FileNotFoundError as exc:
+            # Retour clair si le binaire Codex est introuvable (evite un silence en UI).
+            self._log_issue(
+                "[red]Codex introuvable pour verifier le login.[/red]",
+                niveau="erreur",
+                contexte="codex_status",
+                exc=exc,
+                codex=True,
+            )
+            self._codex_log_action("Astuce: Ctrl+I pour installer Codex ou Ctrl+T pour diagnostiquer.")
+            return False
+        except Exception as exc:
+            # Capture generique pour ne pas bloquer l'UI en cas d'erreur d'execution.
+            self._log_issue(
+                f"[red]Erreur verification login Codex:[/red] {exc}",
+                niveau="erreur",
+                contexte="codex_status",
+                exc=exc,
+                codex=True,
+            )
+            return False
+
+        if rc is None:
+            # Protection: si le process ne renvoie pas de code, on considere la session invalide.
+            self._log_issue(
+                "[red]Statut Codex indetermine.[/red]",
+                niveau="erreur",
+                contexte="codex_status",
+                codex=True,
+            )
+            return False
 
         if rc == 0:
             return True
@@ -449,6 +483,16 @@ class USBIDEApp(App):
                 if line.strip():
                     self._codex_log_output(line)
             self._codex_log_ui("[yellow]Fais Ctrl+K pour `codex login` (ou device auth).[/yellow]")
+        if not self._codex_device_auth_enabled():
+            # Astuce pour eviter le blocage si le navigateur ne s'ouvre pas.
+            hint = (
+                "Astuce: si le navigateur ne s'ouvre pas, "
+                "definis USBIDE_CODEX_DEVICE_AUTH=1 puis Ctrl+K."
+            )
+            if self._codex_compact_view:
+                self._codex_log_action(hint)
+            else:
+                self._codex_log_ui(f"[yellow]{rich_escape(hint)}[/yellow]")
         return False
 
     def _extract_status_code(self, msg: str) -> int | None:
@@ -513,6 +557,36 @@ class USBIDEApp(App):
         msg = payload.get("message")
         if isinstance(msg, str) and msg:
             items.append((kind, msg))
+        return items
+
+    def _codex_items_from_item_payload(self, item: dict[str, object]) -> list[tuple[str, str]]:
+        """Extrait les messages (user/assistant) d'un payload de type item.*."""
+        items: list[tuple[str, str]] = []
+        item_type = item.get("type")
+
+        def add(kind: str, msg: object) -> None:
+            if isinstance(msg, str) and msg:
+                items.append((kind, msg))
+
+        if item_type == "message":
+            # On reutilise le parseur "message" quand l'item est deja dans ce format.
+            return self._codex_items_from_message_payload(item)
+
+        if item_type in {"agent_message", "assistant_message"}:
+            # Les messages assistant peuvent etre dans "text" ou "content".
+            for texte in self._codex_extract_text(item.get("content")):
+                add("assistant", texte)
+            add("assistant", item.get("text") or item.get("message"))
+            return items
+
+        if item_type in {"user_message", "user"}:
+            # Les messages user peuvent etre dans "text" ou "content".
+            for texte in self._codex_extract_text(item.get("content")):
+                add("user", texte)
+            add("user", item.get("text") or item.get("message"))
+            return items
+
+        # Si le format est inconnu, on ne retourne rien ici.
         return items
 
     def _codex_iter_tool_calls(self, *containers: object) -> list[dict[str, object]]:
@@ -604,7 +678,8 @@ class USBIDEApp(App):
 
         item = obj.get("item")
         if isinstance(item, dict):
-            items.extend(self._codex_items_from_message_payload(item))
+            # Support des nouveaux events item.* (ex: item.completed).
+            items.extend(self._codex_items_from_item_payload(item))
             action = self._codex_format_action(item)
             if action:
                 add("action", action)
@@ -687,6 +762,9 @@ class USBIDEApp(App):
         for line in self._codex_wrap_text(msg):
             if line == "":
                 self._codex_log_ui("")
+            elif kind == "assistant":
+                # Les reponses Codex doivent etre visibles en vert.
+                self._codex_log_ui(f"[green]{rich_escape(line)}[/green]")
             else:
                 self._codex_log_output(line)
         self._codex_log_ui("")
@@ -1036,6 +1114,12 @@ class USBIDEApp(App):
 
         # Log dans la sortie Codex pour plus de lisibilite.
         self._codex_log_ui("[b]Login Codex[/b] : navigateur/Device auth selon config.")
+        if not self._codex_device_auth_enabled():
+            # Info utile si le navigateur ne s'ouvre pas automatiquement.
+            self._codex_log_ui(
+                "[dim]Astuce: si le navigateur ne s'ouvre pas, "
+                "definis USBIDE_CODEX_DEVICE_AUTH=1 puis relance Ctrl+K.[/dim]"
+            )
         argv = codex_login_argv(self.root_dir, env, device_auth=self._codex_device_auth_enabled())
         self._codex_log_ui(f"\n[b]$[/b] {rich_escape(' '.join(argv))}")
 

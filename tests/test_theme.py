@@ -21,7 +21,11 @@ class TestThemeFrancais(unittest.TestCase):
             "Outils de dev",
             "Quitter",
         ]
-        actual_labels = [label for _, _, label in USBIDEApp.BINDINGS]
+        actual_labels = []
+        # Supporte les tuples historiques et les objets Binding.
+        for binding in USBIDEApp.BINDINGS:
+            label = binding.description if hasattr(binding, "description") else binding[2]
+            actual_labels.append(label)
 
         self.assertEqual(actual_labels, expected_labels)
 

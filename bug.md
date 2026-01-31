@@ -345,3 +345,110 @@ Traceback (most recent call last):
     raise FileNotFoundError("codex missing")
 FileNotFoundError: codex missing
 ```
+## 2026-01-31T17:43:02
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 782, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<105 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 404, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T17:43:20
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 782, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<105 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 404, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T17:50:18
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 813, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<105 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 410, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T17:59:26
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 813, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<105 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 410, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T18:05:35
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Codex introuvable.[/red] codex missing
+- exception: FileNotFoundError: codex missing
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 816, in _run_codex
+    async for ev in stream_subprocess(argv, cwd=self.root_dir, env=env):
+    ...<105 lines>...
+            self._codex_log_output(json.dumps(obj, ensure_ascii=False))
+  File "C:\Users\nodig\PycharmProject\UsbDEV\tests\test_app.py", line 424, in fake_stream
+    raise FileNotFoundError("codex missing")
+FileNotFoundError: codex missing
+```
+## 2026-01-31T18:07:31
+- niveau: erreur
+- contexte: codex_exec
+- message: [red]Erreur execution Codex:[/red] Separator is not found, and chunk exceed the limit
+- exception: ValueError: Separator is not found, and chunk exceed the limit
+```
+Traceback (most recent call last):
+  File "C:\Users\nodig\AppData\Local\Programs\Python\Python313\Lib\asyncio\streams.py", line 562, in readline
+    line = await self.readuntil(sep)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nodig\AppData\Local\Programs\Python\Python313\Lib\asyncio\streams.py", line 663, in readuntil
+    raise exceptions.LimitOverrunError(
+        'Separator is not found, and chunk exceed the limit',
+        offset)
+asyncio.exceptions.LimitOverrunError: Separator is not found, and chunk exceed the limit
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\app.py", line 813, in _run_codex
+    # Robustesse: on capture les erreurs de lancement pour eviter un crash UI.
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<105 lines>...
+            if isinstance(obj, dict) and isinstance(obj.get("type"), str):
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nodig\PycharmProject\UsbDEV\usbide\runner.py", line 56, in stream_subprocess
+    raw = await proc.stdout.readline()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nodig\AppData\Local\Programs\Python\Python313\Lib\asyncio\streams.py", line 571, in readline
+    raise ValueError(e.args[0])
+ValueError: Separator is not found, and chunk exceed the limit
+```

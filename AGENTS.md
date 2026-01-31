@@ -6,6 +6,7 @@
 
 ## Style et documentation
 - Le code ajouté ou modifié doit être **commenté en français**.
+- Tout nouveau commentaire doit être rédigé en français.
 
 ## Tests
 - Créer des **tests unitaires** pour toute fonctionnalité ajoutée ou modifiée.
