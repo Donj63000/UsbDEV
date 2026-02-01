@@ -83,6 +83,32 @@ class USBIDEApp(App):
         # Journal des erreurs/problemes a la racine du workspace.
         self._bug_log_path: Path = self.root_dir / "bug.md"
 
+    def get_css_variables(self) -> dict[str, str]:
+        """Definit la palette moderne du theme Textual."""
+        # Palette inspiree des UI modernes (teal + bleus profonds).
+        variables = super().get_css_variables()
+        variables.update(
+            {
+                "ui-bg": "#0b0f12",
+                "ui-bg-2": "#0e1720",
+                "ui-surface": "#0f161d",
+                "ui-panel": "#121c24",
+                "ui-panel-strong": "#15212b",
+                "ui-shadow": "#0b1015",
+                "ui-text": "#e6edf3",
+                "ui-text-muted": "#9aa4b2",
+                "ui-accent": "#2dd4bf",
+                "ui-accent-2": "#38bdf8",
+                "ui-warning": "#f59e0b",
+                "ui-warning-strong": "#fbbf24",
+                "ui-success": "#22c55e",
+                "ui-header-1": "#0f1b24",
+                "ui-header-2": "#12303a",
+                "ui-footer": "#0d161d",
+            }
+        )
+        return variables
+
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="main"):
@@ -133,6 +159,32 @@ class USBIDEApp(App):
         )
         self._update_codex_title()
         self._refresh_title()
+        self._apply_intro_animation()
+
+    def _apply_intro_animation(self) -> None:
+        """Anime l'apparition des panneaux pour un rendu plus moderne."""
+        try:
+            widgets = [
+                self.query_one("#tree"),
+                self.query_one("#editor"),
+                self.query_one("#bottom"),
+            ]
+        except Exception:
+            # Ne bloque pas le demarrage si un widget manque (tests/unitaires).
+            return
+
+        # On rend les panneaux invisibles avant le fondu d'entree.
+        for widget in widgets:
+            widget.styles.opacity = 0.0
+
+        for index, widget in enumerate(widgets):
+            widget.styles.animate(
+                "opacity",
+                1.0,
+                duration=0.35,
+                delay=0.08 * index,
+                easing="out_cubic",
+            )
 
     def _handle_exception(self, error: Exception) -> None:
         # Journalise les exceptions fatales avant de laisser Textual afficher l'erreur.
@@ -178,9 +230,9 @@ class USBIDEApp(App):
         return "Compact" if self._codex_compact_view else "Brut"
 
     def _update_codex_title(self) -> None:
-        """Mise a jour du titre du panneau Codex selon le mode courant."""
+        """Mise a jour du titre du panneau Codex."""
         codex_log = self.query_one("#codex_log", RichLog)
-        codex_log.border_title = f"Sortie Codex ({self._codex_mode_label()})"
+        codex_log.border_title = "Sortie Codex"
 
     def _record_issue(
         self,

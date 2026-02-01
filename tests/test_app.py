@@ -375,7 +375,7 @@ class TestUSBIDEAppCodexAffichage(unittest.TestCase):
         self.assertFalse(log_output.called)
 
     def test_update_codex_title_reflete_mode(self) -> None:
-        # Le titre du panneau doit mentionner le mode courant.
+        # Le titre du panneau Codex doit rester stable.
         app = USBIDEApp(root_dir=Path.cwd())
 
         # Faux RichLog minimal pour capter le titre.
@@ -387,10 +387,9 @@ class TestUSBIDEAppCodexAffichage(unittest.TestCase):
         with patch.object(app, "query_one", return_value=dummy_log):
             app._codex_compact_view = True
             app._update_codex_title()
-            self.assertIn("Compact", dummy_log.border_title)
             app._codex_compact_view = False
             app._update_codex_title()
-            self.assertIn("Brut", dummy_log.border_title)
+            self.assertEqual(dummy_log.border_title, "Sortie Codex")
 
     def test_action_clear_log_reset_cache(self) -> None:
         # Le clear doit reinitialiser le cache des messages Codex.
